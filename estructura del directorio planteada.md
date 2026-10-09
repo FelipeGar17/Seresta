@@ -1,75 +1,7 @@
-Arranque del proyecto
 
-Asumo que estás en Windows o Mac/Linux con Node.js ya instalado. Abre la terminal integrada de VS Code (Ctrl + `) dentro de la carpeta del proyecto.
 
-1. Verificar Node y npm
-bash
-node -v
-npm -v
+Estructura de archivos recomendada
 
-Si no los tienes, instala la versión LTS desde nodejs.org. Para este proyecto, Node 20 o superior está bien.
-
-2. Inicializar el proyecto
-bash
-npm init -y
-git init
-3. Instalar TypeScript y Vitest
-bash
-npm install -D typescript vitest tsx @types/node
-npx tsc --init
-tsx te permite ejecutar archivos .ts directamente sin compilar mientras desarrollas.
-vitest es para las pruebas.
-
-Por ahora no instales whatsapp-web.js ni googleapis: empezamos con el motor puro, como acordamos.
-
-4. Configurar tsconfig.json
-
-Reemplaza el contenido generado por esto (más limpio):
-
-json
-{
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "Bundler",
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "outDir": "dist",
-    "rootDir": "src",
-    "resolveJsonModule": true
-  },
-  "include": ["src", "tests"]
-}
-5. Scripts en package.json
-
-Agrega esto dentro de "scripts" y pon "type": "module":
-
-json
-{
-  "type": "module",
-  "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "tsc",
-    "test": "vitest run",
-    "test:watch": "vitest"
-  }
-}
-6. .gitignore
-
-Crea el archivo con:
-
-node_modules/
-dist/
-.env
-.wwebjs_auth/
-.wwebjs_cache/
-data/
-*.log
-
-Esto ya protege la sesión de WhatsApp, los tokens y las variables de entorno.
-
-Estructura de archivos
 mipes-bot/
 ├── src/
 │   ├── core/
