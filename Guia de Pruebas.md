@@ -93,3 +93,46 @@ consola debe mostrar el mensaje detectado y WhatsApp debe responder:
 
 La prueba ignora los mensajes enviados por el propio bot, los grupos y los
 newsletters para evitar respuestas no deseadas. Detén el proceso con `Ctrl+C`.
+
+### Prueba definitiva: paso a paso para tu compañero
+A. Preparación (una sola vez)
+Instalar Node.js 20+ y Git.
+Clonar el repositorio y, dentro de la carpeta, ejecutar:
+powershell
+   npm install
+Crear un calendario de pruebas en Google Calendar (Otros calendarios → Crear calendario nuevo) y copiar su ID (Configuración → Integrar calendario).
+B. Credenciales de Google
+Tu compañero tiene dos opciones:
+Usar el mismo proyecto de Google Cloud: el dueño del proyecto le agrega su correo como usuario de prueba (Google Auth Platform → Público → Usuarios de prueba) y le comparte client_secret.json por un canal privado (nunca por Git).
+Crear su propio proyecto: habilitar Google Calendar API, crear un cliente OAuth tipo Aplicación de escritorio y descargar el JSON.
+Guardar el archivo como .google_auth/client_secret.json.
+C. Limpieza (para empezar de cero)
+Cerrar el bot y cualquier ventana de Chrome del bot, y ejecutar:
+powershell
+   Remove-Item -Recurse -Force .wwebjs_auth, .wwebjs_cache -ErrorAction SilentlyContinue
+   Remove-Item .google_auth\tokens.json -ErrorAction SilentlyContinue
+
+No borrar client_secret.json.
+
+D. Autorizar Google
+Ejecutar:
+powershell
+   npm run test:gcal-auth
+Abrir la URL que aparece, elegir la cuenta, pulsar Avanzada → Ir a la app y aceptar los permisos.
+Verificar en consola: ¿Refresh token recibido? true.
+E. Iniciar el bot
+Ejecutar con el ID del calendario de pruebas:
+powershell
+    $env:CALENDAR_ID="ID_DEL_CALENDARIO@group.calendar.google.com"; npm run test:wa-gcal
+En el celular del bot: WhatsApp → Dispositivos vinculados → Vincular dispositivo y escanear el QR.
+Esperar el mensaje Bot listo.
+F. Casos de prueba (desde OTRO celular)
+#	Acción	Resultado esperado
+1	Enviar cualquier mensaje	El bot saluda y pide la palabra prueba
+2	Enviar hola	El bot repite la instrucción, no crea nada
+3	Enviar PRUEBA o Prueba.	Se crea la cita y el bot confirma día y hora
+4	Revisar Google Calendar	Evento Cita - Nombre con teléfono en la descripción
+5	Repetir el flujo	La nueva cita queda en el siguiente hueco libre
+6	Crear a mano un evento en el primer hueco libre y repetir el flujo	El bot lo salta y usa otro horario
+7	Enviar prueba dos veces seguidas	Solo un evento
+8	Dos celulares escribiendo a la vez	Cada uno recibe su cita, sin mezclarse

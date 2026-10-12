@@ -9,7 +9,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "whatsapp:test": "tsx tests/whatsapp-web/connection-test.ts",
-    "whatsapp:message-test": "tsx tests/whatsapp-web/message-test.ts"
+    "whatsapp:message-test": "tsx tests/whatsapp-web/message-test.ts",
+    "test:gcal-auth": "tsx src/experiments/google-calendar-auth.ts",
+    "test:gcal": "tsx src/experiments/google-calendar-test.ts",
+    "test:wa-gcal": "tsx src/experiments/whatsapp-calendar-test.ts"
   },
   "keywords": [],
   "author": "",
@@ -23,6 +26,7 @@
     "vitest": "^5.0.3"
   },
   "dependencies": {
+    "googleapis": "^185.0.0",
     "qrcode-terminal": "^0.12.0",
     "whatsapp-web.js": "^1.34.7"
   }
