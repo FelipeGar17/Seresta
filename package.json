@@ -8,6 +8,7 @@
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
+    "intent:console": "tsx src/core/nlp/intent-console.ts",
     "whatsapp:test": "tsx tests/whatsapp-web/connection-test.ts",
     "whatsapp:message-test": "tsx tests/whatsapp-web/message-test.ts",
     "test:gcal-auth": "tsx src/experiments/google-calendar-auth.ts",

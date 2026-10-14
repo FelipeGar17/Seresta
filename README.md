@@ -5,16 +5,21 @@ WhatsApp.
 
 ## Estado de las pruebas
 
-### WhatsApp Web
+### Flujo integrado WhatsApp + Google Calendar
 
-Se verificó correctamente que `whatsapp-web.js` puede:
+También se validó satisfactoriamente el flujo completo en
+[`src/experiments/whatsapp-calendar-test.ts`](./src/experiments/whatsapp-calendar-test.ts):
 
-- iniciar WhatsApp Web y autenticarse mediante QR;
-- conservar la sesión local con `LocalAuth`;
-- recuperar la sesión después de cerrar y reiniciar el proceso;
-- leer mensajes entrantes;
-- responder mensajes directos;
-- ignorar mensajes propios, grupos y canales/newsletters en la prueba aislada.
+1. iniciar WhatsApp Web y mostrar el QR;
+2. autenticar y conservar la sesión local;
+3. recibir un mensaje directo de otro usuario;
+4. saludar y solicitar la palabra `prueba`;
+5. leer la respuesta;
+6. buscar un horario disponible;
+7. crear la cita en Google Calendar;
+8. confirmar la reserva por WhatsApp.
+
+Para ejecutarlo: revisa el archivo Guia de Pruebas.md
 
 Las pruebas manuales están en
 [`tests/whatsapp-web/`](./tests/whatsapp-web/).
@@ -43,24 +48,7 @@ npm run test:gcal-auth
 npm run test:gcal
 ```
 
-### Flujo integrado WhatsApp + Google Calendar
 
-También se validó satisfactoriamente el flujo completo en
-[`src/experiments/whatsapp-calendar-test.ts`](./src/experiments/whatsapp-calendar-test.ts):
-
-1. iniciar WhatsApp Web y mostrar el QR;
-2. autenticar y conservar la sesión local;
-3. recibir un mensaje directo de otro usuario;
-4. saludar y solicitar la palabra `prueba`;
-5. leer la respuesta;
-6. buscar un horario disponible;
-7. crear la cita en Google Calendar;
-8. confirmar la reserva por WhatsApp.
-
-Para ejecutarlo:
-
-```powershell
-npm run test:wa-gcal
 ```
 
 Las pruebas realizadas hasta ahora fueron manuales y no reportaron errores.
