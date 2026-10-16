@@ -1,26 +1,37 @@
-// Expresiones equivalentes que suelen utilizar los clientes en español.
+
 export const intentSynonyms = {
   booking: [
     'agendar',
-    'agenda',
     'reservar',
-    'reserva',
     'sacar una cita',
     'sacar cita',
     'pedir cita',
     'pedir turno',
     'separar cita',
     'solicitar cita',
+    'quiero una cita',
+    'necesito una cita',
+    'me gustaria reservar',
+    'quiero un corte',
   ],
   services: [
     'servicios',
-    'ofrecen',
-    'oferta',
+    'que servicios ofrecen',
     'que hacen',
     'que manejan',
-    'tienen',
+    'tienen corte',
+    'tienen manicure',
+    'tienen pedicure',
+    'tienen peinado',
   ],
-  prices: ['precio', 'precios', 'cuanto cuesta', 'cuanto vale', 'tarifa', 'valor'],
+  prices: [
+    'precio',
+    'precios',
+    'cuanto cuesta',
+    'cuanto vale',
+    'tarifa',
+    'valor',
+  ],
   availability: [
     'disponibilidad',
     'disponible',
@@ -29,8 +40,20 @@ export const intentSynonyms = {
     'que horas',
     'cuando hay',
   ],
-  appointment: ['mi cita', 'mis citas', 'reserva que tengo', 'cita tengo'],
-  cancel: ['cancelar', 'cancelo', 'anular', 'quitar mi cita'],
+  appointment: [
+    'mi cita',
+    'mis citas',
+    'reserva que tengo',
+    'cita tengo',
+    'consultar mi cita',
+    'ver mi cita',
+  ],
+  cancel: [
+    'cancelar',
+    'cancelo',
+    'anular',
+    'quitar mi cita',
+  ],
   reschedule: [
     'reprogramar',
     'cambiar la cita',
@@ -39,9 +62,59 @@ export const intentSynonyms = {
     'mover la cita',
     'aplazar',
   ],
-  confirm: ['confirmar', 'confirmo', 'si acepto', 'acepto'],
-  reject: ['rechazar', 'no acepto', 'no quiero', 'no confirmar'],
-  greeting: ['hola', 'buenos dias', 'buenas tardes', 'buenas noches', 'buenas'],
-  goodbye: ['adios', 'hasta luego', 'chao', 'nos vemos', 'gracias'],
-  help: ['ayuda', 'ayudame', 'como funciona', 'que puedo hacer'],
+  confirm: [
+    'confirmar',
+    'confirmo',
+    'si acepto',
+    'acepto',
+  ],
+  reject: [
+    'rechazar',
+    'no acepto',
+    'no confirmar',
+    'rechazo la cita',
+  ],
+  greeting: [
+    'hola',
+    'buenos dias',
+    'buenas tardes',
+    'buenas noches',
+    'buenas',
+  ],
+  goodbye: [
+    'adios',
+    'hasta luego',
+    'chao',
+    'nos vemos',
+  ],
+  help: [
+    'ayuda',
+    'ayudame',
+    'como funciona',
+    'que puedo hacer',
+    'me pueden ayudar',
+  ],
+} as const;
+
+export const intentNegations = {
+  cancel: [
+    'no quiero cancelar',
+    'no puedo cancelar',
+    'no me canceles',
+  ],
+  reschedule: [
+    'no quiero cambiar',
+    'no quiero mover',
+    'no quiero reprogramar',
+  ],
+  booking: [
+    'no quiero reservar',
+    'no quiero agendar',
+    'no necesito una cita',
+  ],
+  confirm: [
+    'no quiero confirmar',
+    'no acepto',
+    'no confirmo',
+  ],
 } as const;

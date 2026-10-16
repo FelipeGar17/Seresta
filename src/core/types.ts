@@ -2,45 +2,45 @@ export type Identifier = string;
 
 // Intenciones que el motor puede reconocer durante una conversación.
 export type ConversationIntent =
-  | 'greeting'
-  | 'book-appointment'
-  | 'check-availability'
-  | 'list-services'
-  | 'check-prices'
-  | 'check-appointment'
-  | 'cancel-appointment'
-  | 'reschedule-appointment'
-  | 'confirm-appointment'
-  | 'reject-appointment'
-  | 'help'
-  | 'goodbye'
-  | 'unknown';
+  | "greeting"
+  | "book-appointment"
+  | "check-availability"
+  | "list-services"
+  | "check-prices"
+  | "check-appointment"
+  | "cancel-appointment"
+  | "reschedule-appointment"
+  | "confirm-appointment"
+  | "reject-appointment"
+  | "help"
+  | "goodbye"
+  | "unknown";
 
 // Estados que indican en qué paso del flujo se encuentra la conversación.
 export type ConversationState =
-  | 'idle'
-  | 'collecting-service'
-  | 'collecting-date'
-  | 'collecting-time'
-  | 'collecting-customer-data'
-  | 'awaiting-confirmation'
-  | 'completed'
-  | 'cancelled'
-  | 'expired';
+  | "idle"
+  | "collecting-service"
+  | "collecting-date"
+  | "collecting-time"
+  | "collecting-customer-data"
+  | "awaiting-confirmation"
+  | "completed"
+  | "cancelled"
+  | "expired";
 
 // Estado de una reserva según su ciclo de vida.
 export type ReservationStatus =
   // Se usa mientras se espera la aceptación del cliente y aún no se ha
   // creado o confirmado el evento definitivo.
-  | 'pending'
+  | "pending"
   // Se usa después de que el cliente acepta y el evento fue creado.
-  | 'confirmed'
+  | "confirmed"
   // La reserva fue cancelada antes de completarse.
-  | 'cancelled'
+  | "cancelled"
   // La cita terminó correctamente.
-  | 'completed'
+  | "completed"
   // El cliente no se presentó a la cita.
-  | 'no-show';
+  | "no-show";
 
 // Datos que se recopilan progresivamente mientras se prepara una cita.
 // Los campos son opcionales porque el cliente puede proporcionarlos en
@@ -52,10 +52,20 @@ export interface ReservationData {
   endsAt?: Date;
 }
 
+// Datos concretos encontrados en un mensaje, separados de su intención.
+export interface ExtractedEntities {
+  serviceName?: string;
+  relativeDate?: string;
+  // Representa la fecha del calendario a medianoche UTC para evitar que el
+  // cambio de zona horaria altere el día mostrado.
+  date?: Date;
+  time?: string;
+  timeOfDay?: "morning" | "afternoon" | "evening";
+}
 // Mensaje intercambiado dentro de una conversación.
 export interface ConversationMessage {
   id: Identifier;
-  direction: 'incoming' | 'outgoing';
+  direction: "incoming" | "outgoing";
   text: string;
   createdAt: Date;
 }

@@ -1,13 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeText } from '../../../src/core/nlp/normalize.js';
+import {
+  normalizeForExtraction,
+  normalizeIntent,
+  normalizeText,
+  splitEmojis,
+} from '../../../src/core/nlp/normalize.js';
 
 describe('normalizeText', () => {
   it('convierte mayúsculas y tildes a un texto simple', () => {
-    expect(normalizeText('¡QUIÉRO una CÍTA!')).toBe('quiero una cita');
+    expect(normalizeIntent('¡QUIÉRO una CÍTA!')).toBe('quiero una cita');
   });
 
   it('reduce espacios y elimina signos innecesarios', () => {
-    expect(normalizeText('  ¿Qué   servicios ofrecen?  ')).toBe(
+    expect(normalizeIntent('  ¿Qué   servicios ofrecen?  ')).toBe(
       'que servicios ofrecen',
     );
   });
@@ -17,6 +22,27 @@ describe('normalizeText', () => {
   });
 
   it('devuelve una cadena vacía para un mensaje sin contenido útil', () => {
-    expect(normalizeText('!!!   ???')).toBe('');
+    expect(normalizeIntent('!!!   ???')).toBe('');
+  });
+
+  it('conserva la ñ en intención y extracción', () => {
+    expect(normalizeIntent('Muñoz pidió año')).toBe('muñoz pidio año');
+    expect(normalizeForExtraction('Muñoz 15/03 a las 3:00')).toBe(
+      'Muñoz 15/03 a las 3:00',
+    );
+  });
+
+  it('expande abreviaturas solo para intención', () => {
+    expect(normalizeIntent('xfa agendar xq necesito cita')).toBe(
+      'por favor agendar porque necesito cita',
+    );
+    expect(normalizeForExtraction('cita x/15')).toBe('cita x/15');
+  });
+
+  it('separa emojis del texto', () => {
+    expect(splitEmojis('cita mañana 🙏')).toEqual({
+      text: 'cita mañana',
+      emojis: ['🙏'],
+    });
   });
 });
