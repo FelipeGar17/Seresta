@@ -8,7 +8,9 @@ import { parseRelativeDate, type DateParserOptions } from './date-parser.js';
 
 const SERVICE_NAMES = [
   'corte de pelo',
+  'cortes de pelo',
   'corte',
+  'cortes',
   'manicure',
   'pedicure',
   'barberia',
@@ -55,11 +57,33 @@ const extractTime = (message: string): string | undefined => {
 const extractTimeOfDay = (
   message: string,
 ): ExtractedEntities['timeOfDay'] => {
-  if (message.includes('en la manana')) return 'morning';
+  if (
+    message.includes('en la manana') ||
+    message.includes('por la manana') ||
+    message.includes('de la manana')
+  ) {
+    return 'morning';
+  }
   if (message.includes('en la tarde')) return 'afternoon';
   if (message.includes('en la noche')) return 'evening';
   return undefined;
 };
+
+// "en/por/de la mañana" es una franja horaria, no una fecha. Se quitan estas
+// frases antes de buscar la fecha relativa para que no inventen "mañana".
+const MORNING_FRANJA_PHRASES = [
+  'en la manana',
+  'por la manana',
+  'de la manana',
+] as const;
+
+const stripMorningFranja = (text: string): string =>
+  MORNING_FRANJA_PHRASES.reduce(
+    (result, phrase) => result.replaceAll(phrase, ' '),
+    text,
+  )
+    .replace(/\s+/g, ' ')
+    .trim();
 
 const containsPhrase = (message: string, phrase: string): boolean =>
   new RegExp(
@@ -73,6 +97,23 @@ const containsPhrase = (message: string, phrase: string): boolean =>
 const extractService = (message: string): string | undefined =>
   SERVICE_NAMES.find((serviceName) => containsPhrase(message, serviceName));
 
+const DATE_TRIGGER_TERMS = [
+  'hoy',
+  'manana',
+  'pasado',
+  'proximo',
+  'domingo',
+  'lunes',
+  'martes',
+  'miercoles',
+  'jueves',
+  'viernes',
+  'sabado',
+] as const;
+
+const RELATIVE_DATE_PATTERN =
+  /\b(?:hoy|pasado\s+manana|manana|el\s+(?:proximo\s+)?(?:domingo|lunes|martes|miercoles|jueves|viernes|sabado))\b/;
+
 // Extrae entidades sin cambiar ni inferir la intención del mensaje.
 export function extractEntities(
   message: string,
@@ -81,14 +122,13 @@ export function extractEntities(
   const { text } = splitEmojis(normalizeForExtraction(message));
   const normalizedMessage = text.toLowerCase();
   const matchingMessage = normalizedMessage.replace(/ñ/gu, 'n');
-  const normalizedIntent =
-    (options.normalizedIntent ?? normalizeIntent(text)).replace(/ñ/gu, 'n');
-  const relativeDate = ['hoy', 'manana', 'proximo'].some((term) =>
-    normalizedIntent.includes(term),
+  const dateCandidateText = stripMorningFranja(
+    (options.normalizedIntent ?? normalizeIntent(text)).replace(/ñ/gu, 'n'),
+  );
+  const relativeDate = DATE_TRIGGER_TERMS.some((term) =>
+    dateCandidateText.includes(term),
   )
-    ? normalizedIntent.match(
-        /\b(?:hoy|manana|el proximo\s+(?:domingo|lunes|martes|miercoles|jueves|viernes|sabado))\b/,
-      )?.[0]
+    ? dateCandidateText.match(RELATIVE_DATE_PATTERN)?.[0]
     : undefined;
 
   return {

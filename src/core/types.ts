@@ -14,6 +14,7 @@ export type ConversationIntent =
   | "reject-appointment"
   | "help"
   | "goodbye"
+  | "thanks"
   | "unknown";
 
 // Estados que indican en qué paso del flujo se encuentra la conversación.

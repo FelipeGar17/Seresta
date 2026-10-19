@@ -31,8 +31,12 @@ consoleInterface.on('line', (line) => {
     normalizedIntent: detection.normalized,
   });
   console.log(`Intención: ${detection.intent}`);
+  console.log(`Intenciones: ${detection.intents.join(', ') || 'ninguna'}`);
   console.log(`Puntaje de regla: ${detection.score}`);
   console.log(`Coincidencias: ${detection.matched.join(', ') || 'ninguna'}`);
+  console.log(
+    `Negadas: ${detection.negatedIntents.join(', ') || 'ninguna'}`,
+  );
   console.log(`Entidades: ${JSON.stringify(entities)}`);
   lastBotQuestion = undefined;
   consoleInterface.prompt();
