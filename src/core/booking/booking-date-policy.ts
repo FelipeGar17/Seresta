@@ -1,75 +1,113 @@
-const DEFAULT_TIME_ZONE = 'America/Bogota';
-const MAX_BOOKING_DAYS_AHEAD = 6;
-const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
+import type { ValidationResult } from '../types.js';
+import {
+  DEFAULT_TIME_ZONE,
+  addDays,
+  getBusinessDateOnly,
+  getDateOnly,
+} from '../time/business-time.js';
+
+export const MAX_BOOKING_DAYS_AHEAD = 6;
 
 export interface BookingDatePolicyOptions {
   now?: Date;
   timeZone?: string;
+  // Ventana configurable por el negocio. Por defecto MAX_BOOKING_DAYS_AHEAD.
+  maxDaysAhead?: number;
 }
 
-interface CalendarDate {
-  year: number;
-  month: number;
-  day: number;
-}
+export type BookingDateFailureReason =
+  | 'invalid-date'
+  | 'invalid-configuration'
+  | 'past-date'
+  | 'out-of-window';
 
-const getLocalCalendarDate = (date: Date, timeZone: string): CalendarDate => {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(date);
-
-  const values = Object.fromEntries(
-    parts
-      .filter(({ type }) => type !== 'literal')
-      .map(({ type, value }) => [type, Number(value)]),
-  );
-
-  return {
-    year: values.year,
-    month: values.month,
-    day: values.day,
-  };
-};
-
-// Las fechas producidas por date-parser representan un día calendario a medianoche UTC.
-const getDateOnlyParts = (date: Date): CalendarDate => ({
-  year: date.getUTCFullYear(),
-  month: date.getUTCMonth() + 1,
-  day: date.getUTCDate(),
-});
-
-const toUtcDateOnly = ({ year, month, day }: CalendarDate): Date =>
-  new Date(Date.UTC(year, month - 1, day));
+export type BookingDateValidationResult = ValidationResult<
+  Date,
+  BookingDateFailureReason
+>;
 
 const isValidDate = (date: Date): boolean => !Number.isNaN(date.getTime());
 
 /**
- * Comprueba si una fecha de reserva está entre hoy y los próximos seis días.
+ * Comprueba una fecha de reserva dentro de la ventana del negocio y explica el
+ * motivo cuando la rechaza.
  *
- * `requestedDate` se interpreta como fecha calendario, igual que las fechas
- * devueltas por parseRelativeDate; `now` se convierte al día local del negocio.
+ * `requestedDateOnly` es una fecha calendario (medianoche UTC del día local),
+ * como las que devuelve el parser de fechas. Para un instante (por ejemplo el
+ * inicio de una cita) usar `checkBookingInstant`.
  */
-export function isBookingDateAllowed(
-  requestedDate: Date,
+export function checkBookingDate(
+  requestedDateOnly: Date,
   options: BookingDatePolicyOptions = {},
-): boolean {
-  if (!isValidDate(requestedDate)) return false;
+): BookingDateValidationResult {
+  if (!isValidDate(requestedDateOnly)) {
+    return { valid: false, reason: 'invalid-date' };
+  }
 
   const timeZone = options.timeZone ?? DEFAULT_TIME_ZONE;
   const now = options.now ?? new Date();
 
-  if (!isValidDate(now)) return false;
+  if (!isValidDate(now)) {
+    return { valid: false, reason: 'invalid-date' };
+  }
 
-  const today = toUtcDateOnly(getLocalCalendarDate(now, timeZone));
-  const requested = toUtcDateOnly(getDateOnlyParts(requestedDate));
-  const latestAllowed = new Date(
-    today.getTime() + MAX_BOOKING_DAYS_AHEAD * MILLISECONDS_PER_DAY,
-  );
+  const maxDaysAhead = options.maxDaysAhead ?? MAX_BOOKING_DAYS_AHEAD;
+  if (!Number.isInteger(maxDaysAhead) || maxDaysAhead < 0) {
+    return { valid: false, reason: 'invalid-configuration' };
+  }
 
-  return requested >= today && requested <= latestAllowed;
+  const today = getBusinessDateOnly(now, timeZone);
+  const requested = getDateOnly(requestedDateOnly);
+  const latestAllowed = addDays(today, maxDaysAhead);
+
+  if (requested < today) {
+    return { valid: false, reason: 'past-date', value: requested };
+  }
+
+  if (requested > latestAllowed) {
+    return { valid: false, reason: 'out-of-window', value: requested };
+  }
+
+  return { valid: true, value: requested };
 }
 
-export { DEFAULT_TIME_ZONE, MAX_BOOKING_DAYS_AHEAD };
+/**
+ * Igual que `checkBookingDate` pero para un instante: se convierte al día
+ * local del negocio antes de comparar.
+ */
+export function checkBookingInstant(
+  instant: Date,
+  options: BookingDatePolicyOptions = {},
+): BookingDateValidationResult {
+  if (!isValidDate(instant)) {
+    return { valid: false, reason: 'invalid-date' };
+  }
+
+  const timeZone = options.timeZone ?? DEFAULT_TIME_ZONE;
+
+  return checkBookingDate(getBusinessDateOnly(instant, timeZone), options);
+}
+
+/**
+ * Comprueba si una fecha de reserva está entre hoy y los próximos seis días.
+ *
+ * `requestedDateOnly` se interpreta como fecha calendario, igual que las
+ * fechas devueltas por el parser de fechas; `now` se convierte al día local
+ * del negocio. Para un instante usar `isBookingInstantAllowed`.
+ */
+export function isBookingDateAllowed(
+  requestedDateOnly: Date,
+  options: BookingDatePolicyOptions = {},
+): boolean {
+  return checkBookingDate(requestedDateOnly, options).valid;
+}
+
+/**
+ * Comprueba si un instante cae dentro de la ventana de reserva del negocio.
+ */
+export function isBookingInstantAllowed(
+  instant: Date,
+  options: BookingDatePolicyOptions = {},
+): boolean {
+  return checkBookingInstant(instant, options).valid;
+}

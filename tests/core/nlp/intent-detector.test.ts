@@ -1,8 +1,16 @@
 import { describe, expect, it } from 'vitest';
+import type { ServiceCatalogEntry } from '../../../src/core/types.js';
 import {
   detectIntent,
   detectIntentDetailed,
 } from '../../../src/core/nlp/intent-detector.js';
+
+// Catálogo de ejemplo: el motor no conoce estos nombres de antemano.
+const CATALOG: ServiceCatalogEntry[] = [
+  { id: 'srv-corte', name: 'Corte de cabello', aliases: ['corte'] },
+  { id: 'srv-barba', name: 'Arreglo de barba' },
+  { id: 'srv-color', name: 'Coloración' },
+];
 
 describe('detectIntent', () => {
   it.each([
@@ -227,5 +235,132 @@ describe('detectIntent — correcciones de reglas amplias y negaciones', () => {
     expect(detectIntentDetailed('No quiero cancelarla').negatedIntents).toContain(
       'cancel-appointment',
     );
+  });
+});
+
+describe('detectIntent — catálogo de servicios', () => {
+  it('detects a booking request from a configured service', () => {
+    expect(
+      detectIntent('Quiero un arreglo de barba', { services: CATALOG }),
+    ).toBe('book-appointment');
+    expect(
+      detectIntent('Necesito un corte mañana', { services: CATALOG }),
+    ).toBe('book-appointment');
+  });
+
+  it('detects service inquiries from the catalog', () => {
+    expect(
+      detectIntent('¿Tienen arreglo de barba?', { services: CATALOG }),
+    ).toBe('list-services');
+    expect(
+      detectIntent('¿Manejan coloración?', { services: CATALOG }),
+    ).toBe('list-services');
+  });
+
+  it('detects price inquiries from the catalog', () => {
+    expect(
+      detectIntent('¿Cuánto cuesta el arreglo de barba?', { services: CATALOG }),
+    ).toBe('check-prices');
+    expect(
+      detectIntent('¿Qué precio tiene la coloración?', { services: CATALOG }),
+    ).toBe('check-prices');
+  });
+
+  it('does not assume that any mention of a service is a booking', () => {
+    expect(
+      detectIntent('¿Cuánto cuesta el corte?', { services: CATALOG }),
+    ).toBe('check-prices');
+    expect(
+      detectIntent('Quiero saber cuánto cuesta un corte', { services: CATALOG }),
+    ).toBe('check-prices');
+  });
+
+  it('does not know services that are not in the catalog', () => {
+    const detection = detectIntentDetailed('Quiero un corte', {
+      services: [{ id: 'srv-color', name: 'Coloración' }],
+    });
+    // La intención es genérica (el cliente pide algo), pero el motor no
+    // reconoce "corte" como servicio del catálogo: eso lo resuelve el
+    // matcher, no el detector.
+    expect(detection.intent).toBe('book-appointment');
+    expect(
+      detection.frames.every((frame) => !frame.catalogBacked),
+    ).toBe(true);
+  });
+
+  it('reports the frame that supported the interpretation', () => {
+    const detection = detectIntentDetailed('Quiero un arreglo de barba', {
+      services: CATALOG,
+    });
+    expect(detection.intent).toBe('book-appointment');
+    expect(detection.frames.map((frame) => frame.phrase)).toContain(
+      'quiero un arreglo de barba',
+    );
+    expect(
+      detection.frames.some((frame) => frame.catalogBacked),
+    ).toBe(true);
+  });
+
+  it('keeps a price inquiry as the main intent in a mixed message', () => {
+    const detection = detectIntentDetailed(
+      'Quiero un arreglo de barba y saber cuánto cuesta',
+      { services: CATALOG },
+    );
+    expect(detection.intent).toBe('check-prices');
+    expect(detection.intents).toContain('book-appointment');
+  });
+
+  it('does not repeat an intention detected by several frames', () => {
+    const detection = detectIntentDetailed(
+      'Quiero un arreglo de barba y saber cuánto cuesta',
+      { services: CATALOG },
+    );
+    expect(detection.intents).toEqual(['check-prices', 'book-appointment']);
+  });
+
+  it('keeps working with an empty catalog', () => {
+    expect(detectIntent('Quiero un corte', { services: [] })).toBe(
+      'book-appointment',
+    );
+  });
+
+  it('negates a frame mentioned in negative form', () => {
+    const detection = detectIntentDetailed('No quiero un corte', {
+      services: CATALOG,
+    });
+    expect(detection.intent).not.toBe('book-appointment');
+    expect(detection.negatedIntents).toContain('book-appointment');
+  });
+});
+
+describe('detectIntent — sin catálogo', () => {
+  it('falls back to generic patterns when there is no catalog', () => {
+    expect(detectIntent('Quiero un corte mañana')).toBe('book-appointment');
+    expect(detectIntent('¿Hacen cortes de pelo?')).toBe('list-services');
+    expect(detectIntent('¿Tienen corte de pelo?')).toBe('list-services');
+  });
+
+  it('does not fire the generic booking frame without an article', () => {
+    expect(detectIntent('Necesito información')).toBe('unknown');
+    expect(detectIntent('Quiero saber los servicios')).toBe('list-services');
+  });
+
+  it('does not treat functional words as a service', () => {
+    expect(detectIntent('Quiero un presupuesto')).toBe('unknown');
+    expect(detectIntent('Quiero un horario')).not.toBe('book-appointment');
+  });
+
+  it('negates a generic frame', () => {
+    const detection = detectIntentDetailed('No quiero un corte');
+    expect(detection.intent).not.toBe('book-appointment');
+    expect(detection.negatedIntents).toContain('book-appointment');
+  });
+
+  it('reports a generic booking as a secondary intent', () => {
+    const detection = detectIntentDetailed(
+      'Quiero un corte y saber cuánto cuesta',
+    );
+    expect(detection.intent).toBe('check-prices');
+    expect(detection.intents).toContain('book-appointment');
   });
 });

@@ -1,5 +1,10 @@
-import type { ConversationIntent } from '../types.js';
+import type { ConversationIntent, ServiceCatalogEntry } from '../types.js';
 import { normalizeIntent } from './normalize.js';
+import {
+  detectCatalogFrames,
+  detectGenericFrames,
+  type IntentFrame,
+} from './intent-frames.js';
 import {
   intentNegations,
   intentSynonyms,
@@ -7,6 +12,10 @@ import {
 
 export interface IntentDetectionOptions {
   lastBotQuestion?: string;
+  // Catálogo de servicios del negocio. Cuando está presente (incluso vacío)
+  // el catálogo es la única fuente de verdad sobre qué es un servicio; sin
+  // catálogo el detector solo puede usar patrones genéricos.
+  services?: ServiceCatalogEntry[];
 }
 
 export interface DetailedIntentDetection {
@@ -17,6 +26,9 @@ export interface DetailedIntentDetection {
   intents: ConversationIntent[];
   score: number;
   matched: string[];
+  // Marcos de intención detectados ("quiero un ___"). Son evidencia de
+  // respaldo: pueden no determinar la intención principal.
+  frames: IntentFrame[];
   // Reglas mencionadas pero anuladas por una negación explícita.
   negated: boolean;
   negatedIntents: ConversationIntent[];
@@ -109,6 +121,22 @@ const contextualShortReply = (
   return undefined;
 };
 
+// Niveles de evidencia. El orden define la prioridad:
+// 1. reglas de sinónimos (expresiones generales del negocio),
+// 2. marcos respaldados por el catálogo (mención de un servicio configurado),
+// 3. marcos genéricos (estructura sin saber qué servicios existen).
+const TIER_SYNONYM = 1;
+const TIER_CATALOG_FRAME = 2;
+const TIER_GENERIC_FRAME = 3;
+
+interface IntentCandidate {
+  intent: ConversationIntent;
+  matched: string[];
+  score: number;
+  priority: number;
+  tier: number;
+}
+
 // Devuelve trazabilidad para saber qué regla produjo la interpretación.
 export function detectIntentDetailed(
   message: string,
@@ -125,6 +153,7 @@ export function detectIntentDetailed(
       intents: [contextualIntent],
       score: 1,
       matched: [normalized],
+      frames: [],
       negated: false,
       negatedIntents: [],
       normalized,
@@ -132,16 +161,68 @@ export function detectIntentDetailed(
   }
 
   const negatedIntents: ConversationIntent[] = [];
-  const candidates = RULES.map((rule, priority) => {
+  const candidates: IntentCandidate[] = RULES.map((rule, priority) => {
     const negated = isNegated(normalized, rule.name);
     if (negated) negatedIntents.push(rule.intent);
     const matched = negated ? [] : matches(normalized, intentSynonyms[rule.name]);
-    return { ...rule, matched, score: matched.length, priority };
+    return {
+      intent: rule.intent,
+      matched,
+      score: matched.length,
+      priority,
+      tier: TIER_SYNONYM,
+    };
   }).filter(({ score }) => score > 0);
 
-  const ranked = candidates.sort(
+  // El catálogo es la fuente de verdad sobre qué servicios existen: sus
+  // marcos solo se activan con una ranura que sea un servicio configurado.
+  const hasCatalog = options.services !== undefined;
+  const catalogDetection = hasCatalog
+    ? detectCatalogFrames(message, options.services ?? [])
+    : { frames: [], negatedIntents: [] };
+  const genericDetection = detectGenericFrames(message);
+
+  for (const intent of [
+    ...catalogDetection.negatedIntents,
+    ...genericDetection.negatedIntents,
+  ]) {
+    if (!negatedIntents.includes(intent)) negatedIntents.push(intent);
+  }
+
+  // Los marcos genéricos son un respaldo de menor nivel: se reportan como
+  // intención secundaria, pero nunca desplazan a una regla de sinónimos ni a
+  // un marco respaldado por el catálogo.
+  const frameCandidates: IntentCandidate[] = [
+    ...catalogDetection.frames.map((frame) => ({
+      intent: frame.intent,
+      matched: [frame.phrase],
+      score: 1,
+      priority: RULES.findIndex((rule) => rule.intent === frame.intent),
+      tier: TIER_CATALOG_FRAME,
+    })),
+    ...genericDetection.frames.map((frame) => ({
+      intent: frame.intent,
+      matched: [frame.phrase],
+      score: 1,
+      priority: RULES.findIndex((rule) => rule.intent === frame.intent),
+      tier: TIER_GENERIC_FRAME,
+    })),
+  ];
+
+  // Un marco no duplica una intención ya detectada por sinónimos o por otro
+  // marco: solo la refuerza.
+  const seenIntents = new Set(candidates.map(({ intent }) => intent));
+  const uniqueFrameCandidates = frameCandidates.filter((frame) => {
+    if (seenIntents.has(frame.intent)) return false;
+    seenIntents.add(frame.intent);
+    return true;
+  });
+
+  const ranked = [...candidates, ...uniqueFrameCandidates].sort(
     (left, right) =>
-      right.score - left.score || left.priority - right.priority,
+      left.tier - right.tier ||
+      right.score - left.score ||
+      left.priority - right.priority,
   );
 
   return {
@@ -149,6 +230,7 @@ export function detectIntentDetailed(
     intents: ranked.map(({ intent }) => intent),
     score: ranked[0]?.score ?? 0,
     matched: ranked[0]?.matched ?? [],
+    frames: [...catalogDetection.frames, ...genericDetection.frames],
     negated: negatedIntents.length > 0,
     negatedIntents,
     normalized,

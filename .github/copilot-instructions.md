@@ -49,6 +49,9 @@ El proyecto separa el motor central de los servicios externos:
 - `src/core/nlp/intent-detector.ts` determina qué quiere hacer el cliente.
   `detectIntentDetailed` también devuelve texto normalizado, puntaje y frases
   coincidentes para diagnóstico.
+- `src/core/nlp/intent-frames.ts` reconoce menciones de servicios con el
+  catálogo del negocio ("quiero un ___"). No resuelve el servicio ni fija
+  nombres de servicios: la resolución es de `service-matcher.ts`.
 - `src/core/nlp/date-parser.ts` interpreta fechas relativas usando la zona
   horaria del negocio, por defecto `America/Bogota`.
 - `src/core/nlp/entity-extractor.ts` extrae servicio, fecha, hora y franja

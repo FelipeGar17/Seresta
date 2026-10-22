@@ -1,6 +1,33 @@
+import { readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
+import type { ServiceCatalogEntry } from '../types.js';
 import { detectIntentDetailed } from './intent-detector.js';
 import { extractEntities } from './entity-extractor.js';
+
+const loadCatalog = (): ServiceCatalogEntry[] | undefined => {
+  const cliArgument = process.argv.indexOf('--catalog');
+  const path =
+    (cliArgument >= 0 ? process.argv[cliArgument + 1] : undefined) ??
+    process.env.CATALOG_PATH;
+
+  if (!path) return undefined;
+
+  const content = JSON.parse(readFileSync(path, 'utf-8')) as
+    | ServiceCatalogEntry[]
+    | { services?: ServiceCatalogEntry[] };
+
+  return Array.isArray(content) ? content : (content.services ?? []);
+};
+
+const catalog = loadCatalog();
+
+if (catalog) {
+  console.log(`Catálogo cargado: ${catalog.length} servicio(s).`);
+} else {
+  console.log(
+    'Sin catálogo: los servicios no se resuelven. Usa --catalog <archivo> o CATALOG_PATH.',
+  );
+}
 
 // Permite probar el detector escribiendo mensajes directamente en la consola.
 const consoleInterface = createInterface({
@@ -26,14 +53,25 @@ consoleInterface.on('line', (line) => {
     return;
   }
 
-  const detection = detectIntentDetailed(line, { lastBotQuestion });
+  const detection = detectIntentDetailed(line, {
+    lastBotQuestion,
+    services: catalog,
+  });
   const entities = extractEntities(line, {
     normalizedIntent: detection.normalized,
+    services: catalog,
   });
   console.log(`Intención: ${detection.intent}`);
   console.log(`Intenciones: ${detection.intents.join(', ') || 'ninguna'}`);
   console.log(`Puntaje de regla: ${detection.score}`);
   console.log(`Coincidencias: ${detection.matched.join(', ') || 'ninguna'}`);
+  console.log(
+    `Marcos: ${
+      detection.frames
+        .map((frame) => `${frame.phrase}${frame.catalogBacked ? '*' : ''}`)
+        .join(', ') || 'ninguno'
+    }`,
+  );
   console.log(
     `Negadas: ${detection.negatedIntents.join(', ') || 'ninguna'}`,
   );

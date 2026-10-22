@@ -53,15 +53,79 @@ export interface ReservationData {
   endsAt?: Date;
 }
 
+// Días de la semana en el orden calendario (0 = domingo).
+export type Weekday =
+  | "sunday"
+  | "monday"
+  | "tuesday"
+  | "wednesday"
+  | "thursday"
+  | "friday"
+  | "saturday";
+
+// Repetición detectada en el mensaje, por ejemplo "los martes".
+export interface Recurrence {
+  frequency: "weekly";
+  weekday: Weekday;
+}
+
+export interface BusinessHoursInterval {
+  opensAt: string;
+  closesAt: string;
+}
+
+export type WeeklyBusinessHours = Partial<
+  Record<Weekday, BusinessHoursInterval[]>
+>;
+
+export interface BusinessClosure {
+  date: string;
+  reason?: string;
+}
+
+export interface BookingPolicy {
+  minimumNoticeMinutes?: number;
+  maxDaysAhead?: number;
+}
+
+// Entrada del catálogo de servicios que el motor sabe resolver por texto.
+// Cada negocio define su propio catálogo: el motor no conoce nombres fijos.
+export interface ServiceCatalogEntry {
+  id?: Identifier;
+  name: string;
+  // Formas alternativas de nombrar el servicio ("arreglo de barba", etc.).
+  aliases?: string[];
+}
+
+// Resultado de resolver una petición de servicio contra el catálogo.
+export type ServiceMatch =
+  | {
+      status: 'matched';
+      service: ServiceCatalogEntry;
+    }
+  | {
+      status: 'ambiguous';
+      // Varias coincidencias equivalentes: el bot debe preguntar, no elegir.
+      candidates: ServiceCatalogEntry[];
+    }
+  | {
+      status: 'not-found';
+    };
+
 // Datos concretos encontrados en un mensaje, separados de su intención.
 export interface ExtractedEntities {
-  serviceName?: string;
+  // Resultado de resolver el servicio pedido contra el catálogo del negocio.
+  // Solo se rellena si el extractor recibió el catálogo.
+  serviceMatch?: ServiceMatch;
   relativeDate?: string;
   // Representa la fecha del calendario a medianoche UTC para evitar que el
   // cambio de zona horaria altere el día mostrado.
   date?: Date;
   time?: string;
   timeOfDay?: "morning" | "afternoon" | "evening";
+  // Presente cuando el cliente habla de una repetición ("los martes") y no
+  // de una fecha única.
+  recurrence?: Recurrence;
 }
 // Mensaje intercambiado dentro de una conversación.
 export interface ConversationMessage {
@@ -109,6 +173,8 @@ export interface Service {
   businessId: Identifier;
   name: string;
   description?: string;
+  // Formas alternativas de nombrar el servicio, configuradas por el negocio.
+  aliases?: string[];
   price: number;
   durationMinutes: number;
   active: boolean;
@@ -123,4 +189,35 @@ export interface ConfiguracionNegocio {
   googleCalendarId: string;
   services: Service[];
   paymentMethods?: string[];
+  businessHours?: WeeklyBusinessHours;
+  closures?: BusinessClosure[];
+  bookingPolicy?: BookingPolicy;
 }
+
+// Motivos de rechazo compartidos por todos los validadores del motor.
+export type ValidationReason =
+  | 'not-found'
+  | 'inactive'
+  | 'invalid-configuration'
+  | 'invalid-date'
+  | 'past-date'
+  | 'out-of-window'
+  | 'outside-hours'
+  | 'closed-day'
+  | 'exceptional-closure'
+  | 'insufficient-notice'
+  | 'invalid-service-duration'
+  | 'incomplete';
+
+// Resultado de una validación: el valor válido o el motivo del rechazo.
+export type ValidationResult<T, R extends string = ValidationReason> =
+  | {
+      valid: true;
+      value: T;
+    }
+  | {
+      valid: false;
+      reason: R;
+      // Contexto opcional del rechazo (por ejemplo, el servicio inválido).
+      value?: T;
+    };

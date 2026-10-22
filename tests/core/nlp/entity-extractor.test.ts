@@ -1,14 +1,24 @@
 import { describe, expect, it } from 'vitest';
+import type { ServiceCatalogEntry } from '../../../src/core/types.js';
 import { extractEntities } from '../../../src/core/nlp/entity-extractor.js';
 
 const now = new Date('2026-10-15T15:00:00.000Z');
 
+const services: ServiceCatalogEntry[] = [
+  { id: 'srv-1', name: 'Corte de cabello', aliases: ['corte de pelo'] },
+  { id: 'srv-2', name: 'Manicure' },
+  { id: 'srv-3', name: 'Cortes de pelo' },
+];
+
 describe('extractEntities', () => {
   it('extracts service, date, morning range and keeps them separate', () => {
     expect(
-      extractEntities('Quisiera reservar un corte mañana en la mañana', { now }),
+      extractEntities('Quisiera reservar un corte de cabello mañana en la mañana', {
+        now,
+        services,
+      }),
     ).toEqual({
-      serviceName: 'corte',
+      serviceMatch: { status: 'matched', service: services[0] },
       relativeDate: 'manana',
       date: new Date('2026-10-16T00:00:00.000Z'),
       time: undefined,
@@ -26,7 +36,7 @@ describe('extractEntities', () => {
 
   it('returns partial entities without inventing missing data', () => {
     expect(extractEntities('Quiero una cita')).toEqual({
-      serviceName: undefined,
+      serviceMatch: undefined,
       relativeDate: undefined,
       date: undefined,
       time: undefined,
@@ -49,16 +59,50 @@ describe('extractEntities', () => {
     ).toEqual(new Date('2026-10-16T00:00:00.000Z'));
   });
 
-  it('extracts plural service names in service inquiries', () => {
-    expect(extractEntities('¿Hacen cortes de pelo?')).toMatchObject({
-      serviceName: 'cortes de pelo',
-    });
-    expect(extractEntities('¿Tienen servicio de manicure?')).toMatchObject({
-      serviceName: 'manicure',
+  it('does not resolve a service without a catalog', () => {
+    expect(extractEntities('Quiero un corte de cabello', { now })).toMatchObject({
+      serviceMatch: undefined,
     });
   });
 
-  it('does not invent a date from morning time-of-day phrases', () => {
+  it('reports a service that is not in the catalog', () => {
+    expect(
+      extractEntities('Quiero una manicure', { now, services: [] }),
+    ).toMatchObject({
+      serviceMatch: { status: 'not-found' },
+    });
+  });
+
+  it('resolves the service from the business catalog', () => {
+    expect(
+      extractEntities('¿Tienen servicio de manicure?', { now, services }),
+    ).toMatchObject({
+      serviceMatch: { status: 'matched', service: services[1] },
+    });
+  });
+
+  it('resolves a service through a configured alias', () => {
+    expect(
+      extractEntities('Quiero un corte de pelo', { now, services }),
+    ).toMatchObject({
+      serviceMatch: { status: 'matched', service: services[0] },
+    });
+  });
+
+  it('does not choose a service when several match equally', () => {
+    const ambiguous: ServiceCatalogEntry[] = [
+      { id: 'a', name: 'Servicio A' },
+      { id: 'b', name: 'Servicio B', aliases: ['servicio a'] },
+    ];
+
+    expect(
+      extractEntities('quiero el servicio a', { now, services: ambiguous }),
+    ).toMatchObject({
+      serviceMatch: { status: 'ambiguous', candidates: ambiguous },
+    });
+  });
+
+  it('does not infer a date from morning time-of-day phrases', () => {
     expect(
       extractEntities('Quiero una cita en la mañana', { now }),
     ).toMatchObject({
@@ -126,22 +170,16 @@ describe('extractEntities', () => {
 
   it('extracts service, date and time together', () => {
     expect(
-      extractEntities('Quiero un corte de pelo mañana a las 3 p.m.', { now }),
+      extractEntities('Quiero un corte de cabello mañana a las 3 p.m.', {
+        now,
+        services,
+      }),
     ).toEqual({
-      serviceName: 'corte de pelo',
+      serviceMatch: { status: 'matched', service: services[0] },
       relativeDate: 'manana',
       date: new Date('2026-10-16T00:00:00.000Z'),
       time: '15:00',
       timeOfDay: undefined,
-    });
-  });
-
-  it('prefers the compound service name over the shorter one', () => {
-    expect(extractEntities('Quiero un corte de pelo', { now })).toMatchObject({
-      serviceName: 'corte de pelo',
-    });
-    expect(extractEntities('Quiero un corte', { now })).toMatchObject({
-      serviceName: 'corte',
     });
   });
 
@@ -187,6 +225,35 @@ describe('extractEntities', () => {
     expect(extractEntities('Quiero cita ahoy', { now })).toMatchObject({
       relativeDate: undefined,
       date: undefined,
+    });
+  });
+
+  it('extracts a weekday written without an article', () => {
+    expect(extractEntities('Quiero una cita para lunes', { now })).toMatchObject({
+      relativeDate: 'lunes',
+      date: new Date('2026-10-19T00:00:00.000Z'),
+    });
+  });
+
+  it('extracts the explicit "próximo" week', () => {
+    expect(
+      extractEntities('Quiero una cita el próximo lunes', { now }),
+    ).toMatchObject({
+      relativeDate: 'el proximo lunes',
+      date: new Date('2026-10-19T00:00:00.000Z'),
+    });
+  });
+
+  it('reports a recurring weekday without turning it into a single date', () => {
+    expect(extractEntities('Quiero cita los martes', { now })).toMatchObject({
+      relativeDate: undefined,
+      date: undefined,
+      recurrence: { frequency: 'weekly', weekday: 'tuesday' },
+    });
+    expect(extractEntities('Quiero cita cada martes', { now })).toMatchObject({
+      relativeDate: undefined,
+      date: undefined,
+      recurrence: { frequency: 'weekly', weekday: 'tuesday' },
     });
   });
 });
