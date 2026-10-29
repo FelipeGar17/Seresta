@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { ServiceCatalogEntry } from '../../../src/core/types.js';
-import { extractEntities } from '../../../src/core/nlp/entity-extractor.js';
+import {
+  extractBareCustomerName,
+  extractEntities,
+} from '../../../src/core/nlp/entity-extractor.js';
 
 const now = new Date('2026-10-15T15:00:00.000Z');
 
@@ -34,6 +37,37 @@ describe('extractEntities', () => {
     });
   });
 
+  it('extracts Spanish afternoon and morning period expressions', () => {
+    expect(
+      extractEntities('Mañana a las 3 de la tarde', { now }),
+    ).toMatchObject({
+      relativeDate: 'manana',
+      date: new Date('2026-10-16T00:00:00.000Z'),
+      time: '15:00',
+      timeOfDay: 'afternoon',
+    });
+    expect(extractEntities('Cita a las 3:30 de la tarde', { now })).toMatchObject(
+      {
+        time: '15:30',
+      },
+    );
+    expect(extractEntities('Cita a las 12 de la mañana', { now })).toMatchObject(
+      {
+        time: '00:00',
+      },
+    );
+  });
+
+  it.each([
+    ['Dame el turno de las tres de la tarde', '15:00'],
+    ['tres pm', '15:00'],
+    ['3 pm', '15:00'],
+    ['a la una de la mañana', '01:00'],
+    ['a las doce de la mañana', '00:00'],
+  ])('extracts spoken or numeric time from "%s"', (message, time) => {
+    expect(extractEntities(message, { now })).toMatchObject({ time });
+  });
+
   it('returns partial entities without inventing missing data', () => {
     expect(extractEntities('Quiero una cita')).toEqual({
       serviceMatch: undefined,
@@ -45,9 +79,9 @@ describe('extractEntities', () => {
   });
 
   it('preserves extraction punctuation and ignores emojis', () => {
-    expect(extractEntities('Quiero cita el 15/03 a las 3:00 🙏')).toMatchObject({
-      time: '03:00',
-    });
+    const entities = extractEntities('Quiero cita el 15/03 a las 3:00 🙏');
+    expect(entities.time).toBeUndefined();
+    expect(entities.ambiguousTime).toEqual({ hour: 3, minute: 0 });
   });
 
   it('can reuse the normalized intent from the detector', () => {
@@ -255,5 +289,102 @@ describe('extractEntities', () => {
       date: undefined,
       recurrence: { frequency: 'weekly', weekday: 'tuesday' },
     });
+  });
+
+  it.each([
+    ['Me llamo Andrés', 'Andrés'],
+    ['mi nombre es carlos', 'Carlos'],
+    ['Soy María José', 'María José'],
+    ['mi nombre es carlos y quiero agendar un corte de pelo mañana a las 3 pm', 'Carlos'],
+    ['Quiero un corte mañana a las 3 de la tarde, me llamo Carlos', 'Carlos'],
+  ])('extrae el nombre explícito de %j', (message, expected) => {
+    expect(extractEntities(message, { now, services }).customerName).toBe(
+      expected,
+    );
+  });
+
+  it('extrae el nombre sin perder servicio, fecha y hora del mismo mensaje', () => {
+    const entities = extractEntities(
+      'mi nombre es carlos y quiero agendar un corte de cabello mañana a las 3 pm',
+      { now, services },
+    );
+
+    expect(entities.customerName).toBe('Carlos');
+    expect(entities.serviceMatch).toEqual({
+      status: 'matched',
+      service: services[0],
+    });
+    expect(entities.relativeDate).toBe('manana');
+    expect(entities.time).toBe('15:00');
+  });
+
+  it.each([
+    ['Quiero agendar a nombre de Sara', 'Sara'],
+    ['agéndalo a nombre de sara, gracias', 'Sara'],
+    ['a nombre de gracias', undefined],
+  ])('extrae "a nombre de" solo como prefijo explícito: %j', (message, expected) => {
+    expect(extractEntities(message, { now, services }).customerName).toBe(
+      expected,
+    );
+  });
+
+  it.each([
+    ['quiero cambiar la fecha de mañana para el jueves', '2026-10-15'],
+    ['quiero cambiar la fecha para el jueves', '2026-10-15'],
+    ['cambia la fecha del viernes al jueves', '2026-10-15'],
+    ['cambiar la fecha de hoy para pasado mañana', '2026-10-17'],
+    ['para el jueves', '2026-10-15'],
+  ])('usa la fecha de destino en %j', (message, expectedDate) => {
+    expect(extractEntities(message, { now }).date).toEqual(
+      new Date(`${expectedDate}T00:00:00.000Z`),
+    );
+  });
+
+  it.each([
+    ['quiero cita mañana', '2026-10-16'],
+    ['quiero cita de mañana', '2026-10-16'],
+    ['el jueves', '2026-10-15'],
+  ])('mantiene una sola fecha sin destino en %j', (message, expectedDate) => {
+    expect(extractEntities(message, { now }).date).toEqual(
+      new Date(`${expectedDate}T00:00:00.000Z`),
+    );
+  });
+
+  it.each([
+    'Carlos',
+    'de Carlos',
+    'soy hoy',
+    'me llamo gracias',
+    'Hola',
+  ])('no inventa un nombre explícito en %j', (message) => {
+    expect(extractEntities(message, { now, services }).customerName).toBe(
+      undefined,
+    );
+  });
+
+  it.each([
+    ['carlos', 'Carlos'],
+    ['de carlos', 'Carlos'],
+    ['De Carlos Ruiz', 'Carlos Ruiz'],
+    ['de Sara', 'Sara'],
+    ['de Sara, gracias', 'Sara'],
+    ['de Sara gracias', 'Sara'],
+    ['a nombre de Sara', 'Sara'],
+    ['a nombre de sara, por favor', 'Sara'],
+    ['es Sara', 'Sara'],
+    ['Sara', 'Sara'],
+    ['sara por favor', 'Sara'],
+    ['gracias, de Sara', 'Sara'],
+    ['gracias', undefined],
+    ['muchas gracias', undefined],
+    ['por favor', undefined],
+    ['jueves', undefined],
+    ['a nombre de gracias', undefined],
+    ['Andrés', 'Andrés'],
+    ['sí', undefined],
+    ['mañana', undefined],
+    ['25:00', undefined],
+  ])('interpreta %j como respuesta de nombre: %j', (message, expected) => {
+    expect(extractBareCustomerName(message)).toBe(expected);
   });
 });

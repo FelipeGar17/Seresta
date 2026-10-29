@@ -34,6 +34,50 @@ const collectPhrases = (services: ServiceCatalogEntry[]): ServicePhrase[] =>
     })),
   );
 
+const RELATED_GENERIC_WORDS: ReadonlySet<string> = new Set([
+  'servicio',
+  'cita',
+  'precio',
+  'tarifa',
+  'valor',
+  'hora',
+]);
+
+// Singular aproximado: "cortes" y "corte" cuentan como la misma palabra.
+const stemWord = (word: string): string =>
+  word.length > 4 && word.endsWith('es')
+    ? word.slice(0, -2)
+    : word.length > 3 && word.endsWith('s')
+      ? word.slice(0, -1)
+      : word;
+
+const significantWords = (text: string): Set<string> =>
+  new Set(
+    (normalizeServiceName(text).match(/[\p{Letter}\p{Number}]+/gu) ?? [])
+      .filter((word) => word.length >= 4)
+      .map(stemWord)
+      .filter((word) => !RELATED_GENERIC_WORDS.has(word)),
+  );
+
+/**
+ * Servicios que comparten alguna palabra significativa con el mensaje, para
+ * consultas de catálogo ("¿cuánto cuesta el corte?"). Es solo una pista para
+ * pedir aclaración: nunca resuelve ni elige un servicio para una reserva.
+ */
+export function findRelatedServices(
+  text: string,
+  services: ServiceCatalogEntry[],
+): ServiceCatalogEntry[] {
+  const messageWords = significantWords(text);
+  if (messageWords.size === 0) return [];
+
+  return services.filter((service) =>
+    [service.name, ...(service.aliases ?? [])].some((phrase) =>
+      [...significantWords(phrase)].some((word) => messageWords.has(word)),
+    ),
+  );
+}
+
 /**
  * Resuelve una petición de servicio contra el catálogo del negocio.
  *

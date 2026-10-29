@@ -1,8 +1,6 @@
 import type {
-  BusinessHoursInterval,
   ConfiguracionNegocio,
   ValidationResult,
-  Weekday,
 } from '../types.js';
 import {
   checkBookingInstant,
@@ -12,8 +10,16 @@ import {
   getBusinessDateOnly,
   getLocalTimeMinutes,
   getWeekdayOfDateOnly,
-  parseTimeToMinutes,
 } from '../time/business-time.js';
+import {
+  getAppointmentIntervalMinutes,
+  getAppointmentOccupancy,
+  getDayScheduleSegments,
+  isStartAlignedWithSegment,
+  isValidAppointmentInterval,
+  isValidBusinessHoursSchedule,
+  type AppointmentOccupancy,
+} from './appointment-schedule.js';
 
 export type BusinessHoursValidationReason =
   | BookingDateFailureReason
@@ -21,6 +27,7 @@ export type BusinessHoursValidationReason =
   | 'exceptional-closure'
   | 'closed-day'
   | 'outside-hours'
+  | 'misaligned-start'
   | 'invalid-service-duration';
 
 export interface BusinessHoursValidationInput {
@@ -29,55 +36,26 @@ export interface BusinessHoursValidationInput {
   now?: Date;
 }
 
+export type BusinessHoursSlot = AppointmentOccupancy;
+
 export type BusinessHoursValidationResult = ValidationResult<
-  { startsAt: Date; endsAt: Date },
+  BusinessHoursSlot,
   BusinessHoursValidationReason
 >;
 
 const isValidDate = (value: Date): boolean => !Number.isNaN(value.getTime());
 
-const isValidInterval = (interval: BusinessHoursInterval): boolean => {
-  const opensAt = parseTimeToMinutes(interval.opensAt);
-  const closesAt = parseTimeToMinutes(interval.closesAt);
-
-  return (
-    opensAt !== undefined &&
-    closesAt !== undefined &&
-    opensAt < closesAt
-  );
-};
-
-const isValidSchedule = (
-  businessHours: ConfiguracionNegocio['businessHours'],
-): boolean => {
-  if (!businessHours) return false;
-
-  for (const intervals of Object.values(businessHours)) {
-    if (!intervals) continue;
-
-    let previousClose = -1;
-    for (const interval of intervals) {
-      if (!isValidInterval(interval)) return false;
-
-      const opensAt = parseTimeToMinutes(interval.opensAt)!;
-      const closesAt = parseTimeToMinutes(interval.closesAt)!;
-      if (opensAt < previousClose) return false;
-      previousClose = closesAt;
-    }
-  }
-
-  return true;
-};
-
 const isValidPolicy = (
   policy: ConfiguracionNegocio['bookingPolicy'],
 ): boolean =>
   policy === undefined ||
-  (policy.minimumNoticeMinutes === undefined ||
+  ((policy.minimumNoticeMinutes === undefined ||
     (Number.isInteger(policy.minimumNoticeMinutes) &&
       policy.minimumNoticeMinutes >= 0)) &&
-  (policy.maxDaysAhead === undefined ||
-    (Number.isInteger(policy.maxDaysAhead) && policy.maxDaysAhead >= 0));
+    (policy.maxDaysAhead === undefined ||
+      (Number.isInteger(policy.maxDaysAhead) && policy.maxDaysAhead >= 0)) &&
+    (policy.appointmentIntervalMinutes === undefined ||
+      isValidAppointmentInterval(policy.appointmentIntervalMinutes)));
 
 const isValidClosureDate = (date: string): boolean => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
@@ -101,19 +79,18 @@ const isExceptionalClosure = (
   return closures?.some((closure) => closure.date === dateString) ?? false;
 };
 
-const getIntervalsForDay = (
-  businessHours: NonNullable<ConfiguracionNegocio['businessHours']>,
-  weekday: Weekday,
-): BusinessHoursInterval[] => businessHours[weekday] ?? [];
-
 /**
  * Valida el intervalo local de una reserva sin consultar disponibilidad externa.
+ * Incluye el intervalo configurable de agenda y calcula la ocupación de bloques.
  */
 export function validateBusinessHours(
   business: ConfiguracionNegocio,
   input: BusinessHoursValidationInput,
 ): BusinessHoursValidationResult {
-  if (!isValidSchedule(business.businessHours) || !isValidPolicy(business.bookingPolicy)) {
+  if (
+    !isValidBusinessHoursSchedule(business.businessHours) ||
+    !isValidPolicy(business.bookingPolicy)
+  ) {
     return { valid: false, reason: 'invalid-configuration' };
   }
 
@@ -126,6 +103,11 @@ export function validateBusinessHours(
 
   if (!Number.isFinite(input.durationMinutes) || input.durationMinutes <= 0) {
     return { valid: false, reason: 'invalid-service-duration' };
+  }
+
+  const intervalMinutes = getAppointmentIntervalMinutes(business);
+  if (intervalMinutes === undefined) {
+    return { valid: false, reason: 'invalid-configuration' };
   }
 
   const now = input.now ?? new Date();
@@ -152,23 +134,43 @@ export function validateBusinessHours(
 
   const dateOnly = getBusinessDateOnly(input.startsAt, business.timezone);
   const weekday = getWeekdayOfDateOnly(dateOnly);
-  const intervals = getIntervalsForDay(business.businessHours!, weekday);
-  if (intervals.length === 0) {
+  const segments = getDayScheduleSegments(business.businessHours, weekday);
+  if (!segments) {
+    return { valid: false, reason: 'invalid-configuration' };
+  }
+  if (segments.length === 0) {
     return { valid: false, reason: 'closed-day' };
   }
 
   const startMinutes = getLocalTimeMinutes(input.startsAt, business.timezone);
   const endMinutes = startMinutes + input.durationMinutes;
-  const fitsInterval = intervals.some((interval) => {
-    const opensAt = parseTimeToMinutes(interval.opensAt)!;
-    const closesAt = parseTimeToMinutes(interval.closesAt)!;
-    return startMinutes >= opensAt && endMinutes <= closesAt;
-  });
+  const containingSegment = segments.find(
+    (segment) =>
+      startMinutes >= segment.opensAt && endMinutes <= segment.closesAt,
+  );
 
-  if (!fitsInterval) {
+  if (!containingSegment) {
     return { valid: false, reason: 'outside-hours' };
   }
 
-  const endsAt = new Date(input.startsAt.getTime() + input.durationMinutes * 60_000);
-  return { valid: true, value: { startsAt: input.startsAt, endsAt } };
+  if (
+    !isStartAlignedWithSegment(
+      startMinutes,
+      containingSegment,
+      intervalMinutes,
+    )
+  ) {
+    return { valid: false, reason: 'misaligned-start' };
+  }
+
+  const occupancy = getAppointmentOccupancy(
+    input.startsAt,
+    input.durationMinutes,
+    intervalMinutes,
+  );
+  if (!occupancy) {
+    return { valid: false, reason: 'invalid-service-duration' };
+  }
+
+  return { valid: true, value: occupancy };
 }

@@ -25,6 +25,13 @@ export type ConversationState =
   | "collecting-time"
   | "collecting-customer-data"
   | "awaiting-confirmation"
+  // El cliente aceptó el primer resumen; todavía falta la confirmación final.
+  | "awaiting-final-confirmation"
+  // La cita ya está creada; se espera una respuesta breve de cierre.
+  | "awaiting-acknowledgment"
+  // El cliente pidió cancelar una cita ya confirmada y el bot espera la
+  // elección de la cita y/o su confirmación explícita.
+  | "awaiting-cancellation"
   | "completed"
   | "cancelled"
   | "expired";
@@ -49,8 +56,15 @@ export type ReservationStatus =
 export interface ReservationData {
   customerName?: string;
   serviceId?: Identifier;
+  requestedDate?: Date;
+  requestedTime?: string;
+  // Hora de 12 h que el cliente dio sin indicar mañana o tarde. No es una
+  // hora definitiva: el flujo pregunta el periodo y luego la reemplaza por
+  // `requestedTime`.
+  ambiguousTime?: { hour: number; minute: number };
   startsAt?: Date;
   endsAt?: Date;
+  occupiedEndsAt?: Date;
 }
 
 // Días de la semana en el orden calendario (0 = domingo).
@@ -86,12 +100,17 @@ export interface BusinessClosure {
 export interface BookingPolicy {
   minimumNoticeMinutes?: number;
   maxDaysAhead?: number;
+  // Intervalo fijo de la agenda (en minutos). Es independiente de la duración
+  // real del servicio: esta última puede ocupar uno o varios bloques.
+  appointmentIntervalMinutes?: number;
 }
 
 // Entrada del catálogo de servicios que el motor sabe resolver por texto.
 // Cada negocio define su propio catálogo: el motor no conoce nombres fijos.
 export interface ServiceCatalogEntry {
-  id?: Identifier;
+  // Obligatorio: es la identidad estable que vincula la coincidencia del NLP
+  // con el `Service` canónico de la configuración del negocio.
+  id: Identifier;
   name: string;
   // Formas alternativas de nombrar el servicio ("arreglo de barba", etc.).
   aliases?: string[];
@@ -122,10 +141,14 @@ export interface ExtractedEntities {
   // cambio de zona horaria altere el día mostrado.
   date?: Date;
   time?: string;
+  // Hora de 12 h sin mañana/tarde ("a las 4"): no es una hora definitiva.
+  ambiguousTime?: { hour: number; minute: number };
   timeOfDay?: "morning" | "afternoon" | "evening";
   // Presente cuando el cliente habla de una repetición ("los martes") y no
   // de una fecha única.
   recurrence?: Recurrence;
+  // Solo con prefijo explícito ("me llamo X"); nunca se infiere.
+  customerName?: string;
 }
 // Mensaje intercambiado dentro de una conversación.
 export interface ConversationMessage {
@@ -140,11 +163,14 @@ export interface Conversation {
   businessId: Identifier;
   contactId: Identifier;
   whatsappId: string;
-  customerPhone: string;
+  customerPhone?: string;
   intent: ConversationIntent;
   state: ConversationState;
   messages: ConversationMessage[];
   data: ReservationData;
+  // Citas confirmadas candidatas a cancelación mientras el estado es
+  // `awaiting-cancellation`; `selectedId` queda fijado al elegir una.
+  cancellation?: { reservationIds: Identifier[]; selectedId?: Identifier };
   expiresAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -156,13 +182,15 @@ export interface Reservation {
   businessId: Identifier;
   contactId: Identifier;
   whatsappId: string;
-  customerPhone: string;
+  customerPhone?: string;
   customerName: string;
   serviceId: Identifier;
   startsAt: Date;
   endsAt: Date;
   status: ReservationStatus;
   googleCalendarEventId?: string;
+  // Momento de la cancelación; se usa para depurar citas canceladas antiguas.
+  cancelledAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }

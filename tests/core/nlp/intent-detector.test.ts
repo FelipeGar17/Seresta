@@ -26,7 +26,10 @@ describe('detectIntent', () => {
     ['Quiero modificar mi cita antes de confirmarla', 'reschedule-appointment'],
     ['¿Me puede decir qué cita tengo?', 'check-appointment'],
     ['Sí, acepto la reserva', 'confirm-appointment'],
+    ['Sí, la confirmo', 'confirm-appointment'],
+    ['La confirmo', 'confirm-appointment'],
     ['No quiero confirmar', 'reject-appointment'],
+    ['No la confirmo', 'reject-appointment'],
     ['¿Me pueden ayudar?', 'help'],
     ['Gracias, hasta luego', 'goodbye'],
   ] as const)('interprets "%s" as %s', (message, expectedIntent) => {
@@ -211,6 +214,12 @@ describe('detectIntent — correcciones de reglas amplias y negaciones', () => {
     expect(detection.negatedIntents).toContain('confirm-appointment');
   });
 
+  it('does not interpret "no la confirmo" as an affirmative confirmation', () => {
+    const detection = detectIntentDetailed('No la confirmo');
+    expect(detection.intent).toBe('reject-appointment');
+    expect(detection.negatedIntents).toContain('confirm-appointment');
+  });
+
   it('keeps cancellation negated while accepting the reschedule request', () => {
     const detection = detectIntentDetailed(
       'No quiero cancelar mi cita, quiero reprogramarla',
@@ -330,6 +339,43 @@ describe('detectIntent — catálogo de servicios', () => {
     });
     expect(detection.intent).not.toBe('book-appointment');
     expect(detection.negatedIntents).toContain('book-appointment');
+  });
+});
+
+describe('detectIntent — Fase 6: consulta de catálogo frente a reserva', () => {
+  it.each([
+    ['¿Qué servicios ofrecen?', 'list-services'],
+    ['¿Qué cortes hacen?', 'list-services'],
+    ['¿Qué servicios tienen disponibles?', 'list-services'],
+    ['¿Tienen corte de cabello?', 'list-services'],
+    ['qué hacen', 'list-services'],
+    ['¿Cuánto cuesta el corte de cabello?', 'check-prices'],
+    ['¿Cuánto cuesta el corte?', 'check-prices'],
+    ['cuanto vale la coloración', 'check-prices'],
+    ['cuánto sale el corte', 'check-prices'],
+    ['cuánto me cobran por la coloración', 'check-prices'],
+    ['precio del corte', 'check-prices'],
+    ['qué precios manejan', 'check-prices'],
+    ['Quiero reservar un corte de cabello', 'book-appointment'],
+    ['Quiero agendar una cita', 'book-appointment'],
+    ['necesito un corte', 'book-appointment'],
+  ])('%j → %s con catálogo', (message, expected) => {
+    expect(detectIntent(message, { services: CATALOG })).toBe(expected);
+  });
+
+  it('no trata "servicios disponibles" como consulta de disponibilidad', () => {
+    const detection = detectIntentDetailed('¿Qué servicios tienen disponibles?', {
+      services: CATALOG,
+    });
+
+    expect(detection.intent).toBe('list-services');
+    expect(detection.intents).not.toContain('check-availability');
+  });
+
+  it('mantiene check-availability para preguntas de horario', () => {
+    expect(
+      detectIntent('¿Tienen disponibilidad mañana?', { services: CATALOG }),
+    ).toBe('check-availability');
   });
 });
 

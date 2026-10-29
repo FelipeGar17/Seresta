@@ -57,6 +57,10 @@ const PRICES_LEAD = [
   'cuanto es',
   'cuanto cobran',
   'cuanto cobra',
+  'cuanto me cobran',
+  'cuanto me cobra',
+  'cuanto sale',
+  'cuanto salen',
   'que precio tienen',
   'que precio tiene',
   'cual es el precio',
@@ -316,7 +320,31 @@ export function detectCatalogFrames(
     (left, right) => right.length - left.length,
   ).join('|');
 
+  // "¿Qué cortes hacen?": pregunta por un tipo de servicio del catálogo.
+  // Además del nombre completo admite su primera palabra ("cortes" de "Corte
+  // de cabello"), porque aquí solo se decide la intención, no el servicio.
+  const kindWords = [
+    ...new Set(
+      services
+        .flatMap((service) => [service.name, ...(service.aliases ?? [])])
+        .map((phrase) => normalizeServiceName(phrase).split(/\s+/)[0] ?? '')
+        .filter((word) => word.length >= 4),
+    ),
+  ].map(escapeRegExp);
+  const kindSlot =
+    kindWords.length > 0 ? `${slot}|(?:${kindWords.join('|')})` : slot;
+  const kindOfServiceQuestion = new RegExp(
+    `${NOT_BEFORE}(?:que|cuales)\\s+(${kindSlot})(?:e?s)?\\s+(?:${SERVICES_LEAD})${NOT_AFTER}`,
+    'gu',
+  );
+
   return runFrames(message, [
+    {
+      kind: 'services',
+      regex: kindOfServiceQuestion,
+      accept: () => true,
+      catalogBacked: true,
+    },
     {
       kind: 'booking',
       regex: buildFrameRegex(
@@ -341,7 +369,7 @@ export function detectCatalogFrames(
       kind: 'prices',
       regex: buildFrameRegex(
         pricesLead,
-        `(?:(?:${ARTICLES}|de|del)\\s+)?`,
+        `(?:(?:por|de|del)\\s+)?(?:(?:${ARTICLES})\\s+)?`,
         slot,
       ),
       accept: () => true,

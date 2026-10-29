@@ -2,6 +2,7 @@ import qrcode from 'qrcode-terminal';
 import whatsapp from 'whatsapp-web.js';
 
 const { Client, LocalAuth } = whatsapp;
+let whatsappReadyAt: Date | undefined;
 
 const client = new Client({
   authStrategy: new LocalAuth({
@@ -19,10 +20,11 @@ client.on('qr', (qr: string) => {
 });
 
 client.on('authenticated', () => {
-  console.log('Sesión autenticada. Los datos se están guardando localmente.');
+  console.log('Sesión de WhatsApp autenticada.');
 });
 
 client.on('ready', () => {
+  whatsappReadyAt = new Date();
   console.log(`Conexión lista para ${client.info.pushname ?? 'la cuenta autenticada'}.`);
   console.log('Envía un mensaje directo a esta cuenta para probar la lectura y respuesta.');
 });
@@ -36,8 +38,42 @@ client.on('message', async (message) => {
     console.log(`Mensaje ignorado por no ser un chat directo: ${message.from}`);
     return;
   }
+  if (
+    !whatsappReadyAt ||
+    !Number.isSafeInteger(message.timestamp) ||
+    message.timestamp < Math.ceil(whatsappReadyAt.getTime() / 1000)
+  ) {
+    console.log(
+      `Mensaje anterior a la conexión lista ignorado: ${message.from}. Envía un mensaje nuevo después de que WhatsApp esté listo.`,
+    );
+    return;
+  }
 
   console.log(`Mensaje detectado de ${message.from}: ${message.body}`);
+
+  try {
+    const contact = await message.getContact();
+    console.log(
+      'Identidad reportada por whatsapp-web.js:',
+      JSON.stringify(
+        {
+          messageFrom: message.from,
+          messageTo: message.to,
+          groupAuthor: message.author ?? null,
+          messageId: message.id._serialized,
+          messageRemote: message.id.remote,
+          contactId: contact.id._serialized,
+          contactNumber: contact.number,
+          contactName: contact.name ?? null,
+          contactPushname: contact.pushname,
+        },
+        null,
+        2,
+      ),
+    );
+  } catch (error) {
+    console.error('No se pudo consultar la identidad del contacto:', error);
+  }
 
   try {
     await message.reply('¡Hola! Recibí tu mensaje. Esta es una prueba aislada.');

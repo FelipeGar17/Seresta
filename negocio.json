@@ -1,0 +1,65 @@
+{
+  "businessId": "barberia-demo",
+  "nombre": "Barbería Demo",
+  "zonaHoraria": "America/Bogota",
+  "whatsappNumero": "+573000000000",
+  "calendarId": "calendar-demo",
+  "servicios": [
+    {
+      "id": "corte",
+      "nombre": "Corte de cabello",
+      "aliases": ["corte", "corte de pelo"],
+      "precio": 25000,
+      "duracionMinutos": 30,
+      "activo": true
+    },
+    {
+      "id": "corte-barba",
+      "nombre": "Corte y barba",
+      "aliases": ["corte con barba"],
+      "precio": 40000,
+      "duracionMinutos": 45,
+      "activo": true
+    },
+    {
+      "id": "barba",
+      "nombre": "Arreglo de barba",
+      "aliases": ["barba"],
+      "precio": 15000,
+      "duracionMinutos": 20,
+      "activo": true
+    }
+  ],
+  "metodosPago": ["efectivo", "transferencia"],
+  "horariosAtencion": {
+    "monday": [
+      { "abreA": "09:00", "cierraA": "12:00" },
+      { "abreA": "14:00", "cierraA": "19:00" }
+    ],
+    "tuesday": [
+      { "abreA": "09:00", "cierraA": "12:00" },
+      { "abreA": "14:00", "cierraA": "19:00" }
+    ],
+    "wednesday": [
+      { "abreA": "09:00", "cierraA": "12:00" },
+      { "abreA": "14:00", "cierraA": "19:00" }
+    ],
+    "thursday": [
+      { "abreA": "09:00", "cierraA": "12:00" },
+      { "abreA": "14:00", "cierraA": "19:00" }
+    ],
+    "friday": [
+      { "abreA": "09:00", "cierraA": "12:00" },
+      { "abreA": "14:00", "cierraA": "19:00" }
+    ],
+    "saturday": [
+      { "abreA": "09:00", "cierraA": "12:00" },
+      { "abreA": "14:00", "cierraA": "17:00" }
+    ]
+  },
+  "politicaReservas": {
+    "anticipacionMinimaMinutos": 0,
+    "maximoDiasAnticipacion": 7,
+    "intervaloAgendaMinutos": 30
+  }
+}

@@ -47,8 +47,8 @@ Incluirá:
 - Recordatorios.
 - Almacenamiento persistente mediante SQLite.
 - Limpieza controlada de datos antiguos.
-Durante el desarrollo se utilizará inicialmente almacenamiento en memoria para probar los componentes sin necesidad de configurar inmediatamente una base de datos.
-La persistencia con SQLite se incorporará posteriormente.
+Los adaptadores en memoria se utilizan para pruebas unitarias.
+La consola local del motor usa SQLite para persistir conversaciones y reservas; la integración con Google Calendar se mantiene para una fase posterior.
 2.2. Segunda etapa: versión local estable
 Una vez completadas las funciones principales, se trabajará en:
 - Pruebas integrales.
@@ -139,30 +139,24 @@ La configuración podrá incluir:
 - Otras opciones que se incorporen posteriormente.
 Esto permitirá modificar los datos comerciales sin cambiar el código fuente.
 3.6. SQLite
-SQLite será la base de datos local de la versión persistente.
-Se utilizará para almacenar la información que el sistema necesite conservar entre ejecuciones, como:
-- Reservas.
-- Datos necesarios para consultar las citas.
-- Identificadores de eventos de Google Calendar.
-- Estados de las reservas.
-- Control de recordatorios.
-- Información operativa necesaria para recuperación y sincronización.
-También se evaluará qué datos de conversaciones deben persistirse.
-No se debe asumir que todos los mensajes o conversaciones completas necesitan almacenarse permanentemente.
+SQLite es la base de datos local de la primera versión persistente.
+La implementación actual usa `better-sqlite3` y conserva:
+- Borradores conversacionales con vencimiento de 10 minutos y contexto de cierre de 1 minuto después de confirmar; los registros vencidos se depuran al iniciar.
+- Reservas confirmadas y canceladas, con sus estados y fechas.
+- El identificador de contacto de WhatsApp como identidad de búsqueda.
+El teléfono es un campo separado: un identificador `@lid` no debe interpretarse como número celular.
+La base predeterminada está en `data/appointments.sqlite`; se puede cambiar con `SQLITE_DATABASE_PATH`. La carpeta `data/` no se versiona.
+Google Calendar, los eventos y los recordatorios todavía no están integrados.
 3.7. Almacenamiento en memoria
-Antes de integrar SQLite se utilizará almacenamiento en memoria.
-Su finalidad será permitir el desarrollo y las pruebas iniciales del motor conversacional.
-Este almacenamiento se perderá al cerrar el programa, por lo que no se utilizará como persistencia definitiva de las reservas.
-La implementación temporal deberá respetar los mismos contratos que posteriormente implementará SQLite.
+Los adaptadores en memoria se conservan para pruebas unitarias aisladas.
+La consola local del coordinador usa SQLite para que las conversaciones y las citas sobrevivan al cierre del proceso.
 3.8. Librerías auxiliares
-Todavía no se han seleccionado todas las librerías auxiliares.
-Se evaluarán cuando exista una necesidad concreta.
-Las categorías que podrían requerirse son:
+Las librerías auxiliares se incorporan cuando existe una necesidad concreta.
+`better-sqlite3` se utiliza para la persistencia SQLite local. Otras categorías que podrían requerirse son:
 - Validación de datos y configuraciones.
 - Manejo de fechas y zonas horarias.
 - Pruebas automatizadas.
 - Registro de errores y eventos.
-- Acceso a SQLite.
 - Autenticación y conexión con Google Calendar.
 - Empaquetado de la aplicación.
 Antes de incorporar una librería se verificará su compatibilidad, mantenimiento, licencia y costo.
@@ -364,6 +358,7 @@ Ejemplo ilustrativo:
     {
       "id": "corte",
       "nombre": "Corte de cabello",
+      "aliases": ["corte"],
       "duracionMinutos": 30,
       "precio": 25000,
       "activo": true
@@ -376,6 +371,19 @@ Ejemplo ilustrativo:
       "activo": true
     }
   ],
+  "horariosAtencion": {
+    "monday": [
+      { "abreA": "08:00", "cierraA": "18:00" }
+    ]
+  },
+  "cierres": [
+    { "fecha": "2026-12-25", "motivo": "Festivo" }
+  ],
+  "politicaReservas": {
+    "anticipacionMinimaMinutos": 60,
+    "maximoDiasAnticipacion": 10,
+    "intervaloAgendaMinutos": 30
+  },
   "metodosPago": [
     "efectivo",
     "transferencia"
@@ -391,7 +399,11 @@ Los valores son ejemplos y no representan la configuración definitiva de ningú
 - El calendario y la zona horaria deben estar definidos correctamente.
 - El programa debe comprobar la configuración al iniciarse.
 - Si falta un dato obligatorio o existe un error de configuración, el sistema debe mostrar un error claro en lugar de continuar con datos incorrectos.
-Los horarios de atención, días no laborables y reglas de anticipación deberán incorporarse a la configuración o a una estructura complementaria.
+- `src/config/load-config.ts` transforma explícitamente estas claves externas en el modelo interno TypeScript (`name`, `timezone`, `services`, `businessHours`, `closures` y `bookingPolicy`).
+- Los horarios de atención son obligatorios para aceptar reservas.
+- Cada día puede definir varios intervalos. Para cerrar al almuerzo, por ejemplo, se configuran `09:00–12:00` y `14:00–19:00`; el motor rechaza citas que caigan en la pausa o que no alcancen a terminar antes del cierre del tramo.
+- Los días no laborables y reglas de anticipación se configuran mediante `cierres` y `politicaReservas`.
+- `politicaReservas.intervaloAgendaMinutos` define la rejilla de inicio de la agenda. Es un entero positivo entre 1 y 1440; si se omite, se usa 30 minutos. Se acepta el alias superior `intervaloAgendaMinutos`, pero no puede contradecir al valor de la política.
 
 8. PROCESAMIENTO DEL LENGUAJE NATURAL SIN IA GENERATIVA DE PAGO
 El chatbot no se desarrollará inicialmente como un asistente generalista.
@@ -429,6 +441,7 @@ Las intenciones iniciales serán:
 - desconocida
 La clasificación podrá basarse en palabras clave, patrones, sinónimos y reglas de prioridad.
 Cuando no exista suficiente certeza, el sistema deberá solicitar una aclaración en lugar de asumir una intención incorrecta.
+En el primer mensaje de una conversación, si se detecta un saludo o no se reconoce ninguna intención, el bot responderá con una bienvenida cordial y las opciones disponibles. Si el primer mensaje expresa claramente que quiere agendar, consultar servicios/precios o cancelar, se atenderá esa intención directamente, sin interponer un saludo.
 8.4. Extracción de entidades
 Además de detectar la intención, el motor deberá identificar los datos mencionados en el mensaje.
 Las entidades iniciales serán:
@@ -514,12 +527,15 @@ Cuando se disponga de un servicio, una fecha y una hora concretos, el sistema co
 Calculará la duración total de la cita según la configuración del servicio.
 Si el servicio dura 30 minutos y la hora solicitada es las 3:00 p. m., el sistema verificará el intervalo completo de 3:00 p. m. a 3:30 p. m.
 No basta con comprobar que la hora de inicio esté libre.
+El inicio solicitado debe pertenecer a la rejilla del negocio: se alinea con la apertura de la franja de atención según `intervaloAgendaMinutos`. Si no está alineado, se explica al cliente y no se redondea en silencio.
+Si el servicio dura 45 minutos con un intervalo de 30, la cita termina realmente a las 3:45 p. m. pero bloquea hasta las 4:00 p. m.; la siguiente cita puede empezar a las 4:00 p. m.
 10.6. Solicitud de confirmación
-Cuando el horario esté disponible, el bot presentará un resumen con los datos de la reserva.
-El cliente deberá confirmar explícitamente antes de que el sistema cree la cita definitiva.
-Si el cliente modifica algún dato, el sistema actualizará la solicitud y volverá a validar la disponibilidad cuando sea necesario.
+Cuando el horario esté disponible, el bot presentará un resumen con los datos de la reserva y solicitará una primera confirmación explícita.
+Después de esa respuesta, volverá a mostrar el resumen, advertirá que una cita confirmada no se puede modificar y solicitará una segunda confirmación explícita.
+Solo la segunda confirmación crea la reserva definitiva. Si el cliente cambia un dato en cualquiera de las dos etapas, el sistema actualizará la solicitud, volverá a validar la agenda y reiniciará la confirmación desde el primer resumen.
+Una vez creada la cita, el bot enviará el resumen y recordará que solo se puede cancelar. El contexto conversacional esperará un agradecimiento o una respuesta equivalente por un minuto; al recibirla o vencer ese plazo, se cierra el contexto sin afectar la cita confirmada.
 10.7. Creación de la reserva
-Después de la confirmación:
+Después de la segunda confirmación:
 1. Se vuelve a comprobar la disponibilidad.
 2. Se crea el evento en Google Calendar.
 3. Se verifica que el evento se haya creado correctamente.
@@ -532,8 +548,11 @@ La secuencia exacta de recuperación ante errores deberá diseñarse antes de co
 La disponibilidad se determinará consultando Google Calendar.
 11.1. Duración de los servicios
 Cada servicio tendrá una duración configurada.
-El sistema calculará automáticamente la hora de finalización.
+El sistema calculará automáticamente la hora de finalización real.
 Esto permitirá que servicios diferentes ocupen intervalos distintos.
+El espacio bloqueado se calcula en bloques completos de `intervaloAgendaMinutos`: `ceil(duracion / intervalo)`. La duración real no se redondea en el resumen ni en la reserva; solo se redondea el final ocupado que impide el siguiente inicio.
+Un servicio debe comenzar y terminar realmente dentro de una misma franja de atención; no puede invadir un descanso ni superar el cierre.
+Las reservas existentes también bloquean sus bloques completos. Sin una fuente real de disponibilidad no se ofrecen alternativas: la consulta a Google Calendar sigue siendo una fase pendiente.
 11.2. Prevención de reservas duplicadas
 Antes de crear una reserva, el sistema debe comprobar que no exista un evento que ocupe el intervalo solicitado.
 También deberá considerar citas que comiencen antes o después de la hora solicitada, pero que se solapen con ella.
@@ -550,6 +569,7 @@ Además de revisar Google Calendar, el sistema deberá considerar:
 - Días de atención.
 - Días no laborables.
 - Duración del servicio.
+- Intervalo de agenda (`intervaloAgendaMinutos`).
 - Anticipación mínima permitida.
 - Reglas especiales del negocio.
 La estructura exacta de estos parámetros todavía debe definirse.
@@ -593,19 +613,19 @@ Será el identificador recibido a través de la integración. Su formato y estab
 Teléfono del cliente
 Será el teléfono guardado para las necesidades de contacto y las reservas.
 No se asumirá que el identificador de chat o mensaje es siempre un número de teléfono convencional.
-Antes de definir completamente el almacenamiento se probará el comportamiento real de whatsapp-web.js.
+La prueba aislada observó `message.from` con un valor `@lid`. El runtime usa ese valor como `contactId` y mantiene separado el `contact.id._serialized`; solo guarda `contact.number` si la biblioteca lo informa. La estabilidad de estos valores debe confirmarse ejecutando la prueba manual con la sesión local.
 Los datos personales y las credenciales deberán mantenerse protegidos. No se publicarán números reales de clientes, tokens ni credenciales en el repositorio.
 
 14. EXPIRACIÓN DE CONVERSACIONES
 Las conversaciones temporales tendrán una duración limitada.
 14.1. Tiempo de expiración
-Se ha acordado una ventana de 15 minutos para las conversaciones que esperan una respuesta del cliente.
-El vencimiento se calculará tomando como referencia el mensaje del bot que solicita una respuesta.
+Se ha acordado una ventana exacta de 10 minutos para cada borrador y conversación activa.
+El vencimiento se calcula desde el último mensaje recibido y se renueva con cada mensaje. El contexto posterior a la creación de una cita es una excepción: espera una respuesta de cierre por un minuto.
 14.2. Renovación del tiempo
-Cuando el bot envíe una nueva pregunta que requiera respuesta, se actualizará el vencimiento correspondiente.
+Cada mensaje entrante de una conversación activa actualiza `expiresAt` a `now + 10 minutos`, excepto el contexto posterior a confirmar, que conserva su vencimiento de un minuto.
 14.3. Conversaciones expiradas
-Si el cliente no responde dentro del plazo, el contexto temporal podrá eliminarse.
-Si el cliente vuelve a escribir después de la expiración, el bot iniciará un contexto nuevo, salvo que el mensaje permita reconocer una operación diferente.
+Si el cliente no responde dentro del plazo, el contexto temporal vence y la consola/runtime local elimina los registros vencidos al iniciar.
+Si el cliente vuelve a escribir después de la expiración, el bot inicia una conversación nueva sin reutilizar los datos anteriores.
 14.4. Separación de las reservas
 La expiración de una conversación no elimina una cita confirmada.
 Las conversaciones representan el proceso de interacción; las reservas representan operaciones registradas.
@@ -614,16 +634,10 @@ Por tanto, deben tener ciclos de vida independientes.
 15. LIMPIEZA AUTOMÁTICA DE DATOS
 Se ha planteado una política de limpieza para evitar que el almacenamiento local crezca indefinidamente.
 15.1. Conversaciones
-Las conversaciones temporales expiradas se eliminarán automáticamente.
+Las conversaciones temporales expiradas se eliminan al iniciar la consola o el runtime local.
 15.2. Reservas antiguas
-Se ha propuesto eliminar los registros locales de reservas una vez hayan transcurrido 15 días desde la finalización de la cita.
-Sin embargo, antes de implementar esta limpieza, se deberán verificar las necesidades de:
-- Recordatorios.
-- Recuperación ante errores.
-- Sincronización.
-- Trazabilidad de operaciones.
-- Consultas de citas anteriores.
-Los datos que todavía sean necesarios para estas funciones no deberán eliminarse prematuramente.
+Las reservas con estado `cancelled` se conservan 15 días desde `cancelledAt` y después se depuran al iniciar el runtime local.
+Las reservas confirmadas no se eliminan mediante esta política.
 15.3. Google Calendar
 La eliminación de registros locales no eliminará automáticamente los eventos de Google Calendar.
 Si se necesita limpiar eventos antiguos del calendario, se utilizará un procedimiento independiente, como un script o comando manual.
@@ -669,28 +683,16 @@ El contrato se ubicará tentativamente en:
 src/core/conversation/store.ts
 La ruta definitiva deberá respetar la ubicación real del archivo types.ts.
 17.2. MemoryConversationStore
-Será la primera implementación del contrato.
-Se utilizará para desarrollar y probar las operaciones sin una base de datos.
-Los datos se perderán al cerrar el proceso.
+Implementa el contrato para pruebas unitarias aisladas; los datos se pierden al cerrar el proceso.
 17.3. SQLiteConversationStore
-Será la implementación persistente para la versión local.
-Deberá cumplir el mismo contrato para permitir sustituir el almacenamiento en memoria sin cambiar el motor conversacional.
-El nombre definitivo del archivo podrá ajustarse para mantener una convención coherente.
+Implementa `ConversationStore` para el motor local y cumple el mismo contrato que `MemoryConversationStore`.
+La reserva persistente se implementa en `src/core/reservations/sqlite-reservation-repository.ts`.
 17.4. ReservationStore
-Se creará una interfaz independiente para las reservas.
-Deberá contemplar operaciones como:
-- Guardar una reserva.
-- Recuperar una reserva por su identificador.
-- Consultar reservas de un contacto.
-- Consultar reservas de un negocio.
-- Actualizar el estado de una reserva.
-- Registrar cancelaciones.
-- Buscar reservas que deban procesarse.
-- Limpiar datos antiguos según las reglas establecidas.
-Los métodos concretos se definirán antes de implementar la persistencia de reservas.
+`ReservationRepository` ya está implementado con adaptadores en memoria y SQLite.
+Permite crear idempotentemente, recuperar por id, listar citas confirmadas futuras por contacto, actualizar y depurar cancelaciones antiguas.
 
 18. INTEGRACIÓN CON WHATSAPP
-La comunicación se implementará inicialmente mediante whatsapp-web.js.
+La comunicación local se implementa mediante `whatsapp-web.js` en `src/index.ts`.
 El adaptador será responsable de:
 - Recibir mensajes.
 - Obtener los identificadores disponibles del contacto o chat.
@@ -698,6 +700,7 @@ El adaptador será responsable de:
 - Enviar las respuestas generadas por el motor.
 - Comunicar los errores de envío al sistema para su tratamiento.
 No deberá contener las reglas completas del flujo de citas.
+El runtime implementa esta separación; falta validar el flujo completo mediante una sesión local autenticada.
 18.1. Separación del canal
 El motor conversacional deberá recibir mensajes mediante una interfaz común, independientemente del proveedor de WhatsApp.
 Esto permitirá incorporar en el futuro otro adaptador basado en Meta WhatsApp Business Cloud API.
@@ -811,10 +814,10 @@ Desarrollar:
 Estado: pendiente.
 Fase 6. Motor conversacional
 Desarrollar el componente que administra el contexto, identifica los datos pendientes y coordina el flujo.
-Estado: pendiente.
+Estado: completada para el flujo local de creación y cancelación de citas.
 Fase 7. Persistencia con SQLite
 Incorporar almacenamiento persistente y definir las reglas de limpieza de datos.
-Estado: pendiente.
+Estado: completada para conversaciones y reservas locales. La consola elimina borradores vencidos y cancelaciones con más de 15 días al iniciar.
 Fase 8. Servicio de reservas
 Implementar la coordinación de:
 - Validación de datos.
@@ -824,13 +827,13 @@ Implementar la coordinación de:
 - Verificación.
 - Persistencia.
 - Recuperación ante fallos.
-Estado: pendiente.
+Estado: parcial. El motor local valida y confirma citas y permite cancelarlas; disponibilidad real y sincronización con Google Calendar siguen pendientes.
 Fase 9. Integración con Google Calendar
 Conectar el servicio de reservas con un calendario de prueba.
 Estado: pendiente.
 Fase 10. Integración con WhatsApp
 Incorporar el adaptador whatsapp-web.js para recibir mensajes y enviar respuestas.
-Estado: pendiente.
+Estado: implementada en `src/index.ts`; pendiente de prueba manual autenticada con el identificador `@lid` real.
 Fase 11. Recordatorios y mantenimiento
 Desarrollar la revisión periódica de citas, el control de recordatorios y la limpieza de datos.
 Estado: pendiente.

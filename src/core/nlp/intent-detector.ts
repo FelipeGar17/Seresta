@@ -8,6 +8,7 @@ import {
 import {
   intentNegations,
   intentSynonyms,
+  type IntentRuleName,
 } from './synonyms.js';
 
 export interface IntentDetectionOptions {
@@ -35,7 +36,7 @@ export interface DetailedIntentDetection {
   normalized: string;
 }
 
-type RuleName = keyof typeof intentSynonyms;
+type RuleName = IntentRuleName;
 
 // El orden define la prioridad ante empates: las acciones sobre la reserva
 // (cancelar, reprogramar, confirmar, rechazar, reservar) mandan sobre las
@@ -91,18 +92,17 @@ const matches = (message: string, phrases: readonly string[]): string[] => {
 };
 
 
-const isNegated = (
-  message: string,
-  ruleName: RuleName,
-): boolean =>
-  ruleName in intentNegations &&
-  matches(
-    message,
-    intentNegations[ruleName as keyof typeof intentNegations],
-  ).length > 0;
+const negationsByRule: Partial<Record<RuleName, readonly string[]>> =
+  intentNegations;
 
-const AFFIRMATIVE_REPLY = /^(si|sí|claro|acepto|ok|okay|dale)(\s+gracias)?$/u;
-const NEGATIVE_REPLY = /^(no|nunca)(\s+gracias)?$/u;
+const isNegated = (message: string, ruleName: RuleName): boolean =>
+  matches(message, negationsByRule[ruleName] ?? []).length > 0;
+
+const AFFIRMATIVE_REPLY =
+  /^(si|sí|claro|claro que si|por supuesto|acepto|ok|okay|dale|dale pues|de una|listo|perfecto|vale|bueno|con gusto|si se[nñ]or|si se[nñ]ora)(\s+gracias)?$/u;
+const NEGATIVE_REPLY = /^(no|nunca|no se[nñ]or|no se[nñ]ora)(\s+gracias)?$/u;
+
+const CONFIRMATION_QUESTION = /\b(?:confirm\w*|acept\w*)/u;
 
 const contextualShortReply = (
   normalized: string,
@@ -115,7 +115,7 @@ const contextualShortReply = (
   if (!isAffirmative && !isNegative) return undefined;
 
   const question = normalizeIntent(lastBotQuestion);
-  if (/(confirm|acept)/u.test(question)) {
+  if (CONFIRMATION_QUESTION.test(question)) {
     return isNegative ? 'reject-appointment' : 'confirm-appointment';
   }
   return undefined;
@@ -174,6 +174,20 @@ export function detectIntentDetailed(
     };
   }).filter(({ score }) => score > 0);
 
+  // Una frase más larga de otra regla absorbe a la más corta que contiene
+  // ("que servicios tienen disponibles" no es una consulta de disponibilidad).
+  const longestMatches = candidates.flatMap(({ matched }) => matched);
+  for (const candidate of candidates) {
+    candidate.matched = candidate.matched.filter(
+      (phrase) =>
+        !longestMatches.some(
+          (other) => other.length > phrase.length && other.includes(phrase),
+        ),
+    );
+    candidate.score = candidate.matched.length;
+  }
+  const activeCandidates = candidates.filter(({ score }) => score > 0);
+
   // El catálogo es la fuente de verdad sobre qué servicios existen: sus
   // marcos solo se activan con una ranura que sea un servicio configurado.
   const hasCatalog = options.services !== undefined;
@@ -211,14 +225,14 @@ export function detectIntentDetailed(
 
   // Un marco no duplica una intención ya detectada por sinónimos o por otro
   // marco: solo la refuerza.
-  const seenIntents = new Set(candidates.map(({ intent }) => intent));
+  const seenIntents = new Set(activeCandidates.map(({ intent }) => intent));
   const uniqueFrameCandidates = frameCandidates.filter((frame) => {
     if (seenIntents.has(frame.intent)) return false;
     seenIntents.add(frame.intent);
     return true;
   });
 
-  const ranked = [...candidates, ...uniqueFrameCandidates].sort(
+  const ranked = [...activeCandidates, ...uniqueFrameCandidates].sort(
     (left, right) =>
       left.tier - right.tier ||
       right.score - left.score ||

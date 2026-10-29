@@ -22,6 +22,42 @@ export interface CalendarDate {
 }
 
 const formatterCache = new Map<string, Intl.DateTimeFormat>();
+const displayFormatterCache = new Map<string, Intl.DateTimeFormat>();
+
+const getDisplayFormatter = (
+  timeZone: string,
+  dateOnly: boolean,
+): Intl.DateTimeFormat => {
+  const cacheKey = `${timeZone}|${dateOnly ? 'display-date' : 'display-time'}`;
+  const cached = displayFormatterCache.get(cacheKey);
+  if (cached) return cached;
+
+  let formatter: Intl.DateTimeFormat;
+  try {
+    formatter = new Intl.DateTimeFormat(
+      'es-CO',
+      dateOnly
+        ? {
+            timeZone,
+            weekday: 'long',
+            day: 'numeric',
+            month: 'long',
+            year: 'numeric',
+          }
+        : {
+            timeZone,
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true,
+          },
+    );
+  } catch {
+    throw new Error(`Zona horaria inválida: "${timeZone}"`);
+  }
+
+  displayFormatterCache.set(cacheKey, formatter);
+  return formatter;
+};
 
 const getFormatter = (
   timeZone: string,
@@ -169,6 +205,26 @@ export function getLocalTimeMinutes(
   const hour = values.hour === 24 ? 0 : values.hour;
 
   return hour * 60 + values.minute;
+}
+
+/**
+ * Fecha legible en la zona del negocio ("viernes, 23 de octubre de 2026").
+ */
+export function formatBusinessDate(
+  date: Date,
+  timeZone: string = DEFAULT_TIME_ZONE,
+): string {
+  return getDisplayFormatter(timeZone, true).format(date);
+}
+
+/**
+ * Hora legible en la zona del negocio ("3:00 p. m.").
+ */
+export function formatBusinessTime(
+  date: Date,
+  timeZone: string = DEFAULT_TIME_ZONE,
+): string {
+  return getDisplayFormatter(timeZone, false).format(date);
 }
 
 /**

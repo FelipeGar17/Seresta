@@ -52,6 +52,15 @@ const RECURRING_DATE_PATTERN = new RegExp(
   'u',
 );
 
+const DATE_ALTERNATIVES = `(?:pasado\\s+manana|manana|hoy|(?:(?:el|este|esta)\\s+)?(?:(?:proximo|proxima)\\s+)?(?:${WEEKDAY_NAMES})s?)`;
+
+// Corrección de fecha: "cambiar la fecha de mañana para el jueves". La fecha
+// de origen ("de mañana") se descarta y gana la de destino ("el jueves").
+const DATE_CHANGE_SOURCE_PATTERN = new RegExp(
+  `\\b(?:de|del|desde)\\s+${DATE_ALTERNATIVES}\\s+(?:para|a|al|hacia|pa)\\s+(?=${DATE_ALTERNATIVES}\\b)`,
+  'u',
+);
+
 export interface DateParserOptions {
   now?: Date;
   timeZone?: string;
@@ -88,7 +97,9 @@ const isNextWeekPhrase = (phrase: string): boolean =>
  */
 export function matchDatePhrase(text: string): DatePhraseMatch | undefined {
   const normalized = normalizeText(text).replace(/ñ/gu, 'n');
-  const candidate = stripMorningFranja(normalized);
+  const candidate = stripMorningFranja(normalized)
+    .replace(DATE_CHANGE_SOURCE_PATTERN, ' ')
+    .trim();
 
   const recurring = RECURRING_DATE_PATTERN.exec(candidate);
   const keyword = KEYWORD_DATE_PATTERN.exec(candidate);
