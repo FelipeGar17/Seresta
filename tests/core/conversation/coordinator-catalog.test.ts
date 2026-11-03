@@ -176,6 +176,19 @@ describe('coordinador — consultas de catálogo durante una reserva', () => {
     expect(result.conversation.data.serviceId).toBeUndefined();
   });
 
+  it('interpreta «y el corte» como consulta de precio tras preguntar por otro servicio', async () => {
+    const { say } = setup();
+    await say('Quiero reservar una cita');
+    await say('¿Cuánto cuesta la barba?');
+
+    const result = await say('¿Y el corte de cabello?');
+
+    expect(result.reply).toContain('$25.000');
+    expect(result.conversation.state).toBe('collecting-service');
+    expect(result.conversation.data.serviceId).toBeUndefined();
+    expect(result.nextField).toBe('serviceId');
+  });
+
   it('conserva servicio, fecha y nombre al preguntar un precio y retoma la hora', async () => {
     const { say } = setup();
     await say('Quiero un corte de cabello mañana, me llamo Carlos');
@@ -220,5 +233,24 @@ describe('coordinador — consultas de catálogo durante una reserva', () => {
 
     expect(result.conversation.data.serviceId).toBe('beard-1');
     expect(result.nextField).toBe('requestedDate');
+  });
+
+  it('inicia una reserva después de consultar precios y conserva fecha y hora', async () => {
+    const { say } = setup();
+    const prices = await say('¿Cuánto cuestan los servicios?');
+    expect(prices.reply).toMatch(/iniciar una reserva/i);
+
+    const result = await say(
+      'Quiero iniciar una reserva para mañana a las 2:30 p. m.',
+    );
+
+    expect(result.conversation.intent).toBe('book-appointment');
+    expect(result.conversation.state).toBe('collecting-service');
+    expect(result.conversation.data).toMatchObject({
+      requestedDate: new Date('2026-10-16T00:00:00.000Z'),
+      requestedTime: '14:30',
+    });
+    expect(result.nextField).toBe('serviceId');
+    expect(result.reply).toMatch(/servicio/i);
   });
 });

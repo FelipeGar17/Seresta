@@ -8,6 +8,7 @@ import { parseBusinessConfig } from '../../../src/config/load-config.js';
 import { ConversationCoordinator } from '../../../src/core/conversation/coordinator.js';
 import { MemoryConversationStore } from '../../../src/core/conversation/memory-store.js';
 import { MemoryReservationRepository } from '../../../src/core/reservations/memory-reservation-repository.js';
+import type { ReservationCalendar } from '../../../src/core/reservations/reservation-calendar.js';
 import { getPendingReservationFields } from '../../../src/core/conversation/reservation-progress.js';
 
 const now = new Date('2026-10-15T15:00:00.000Z');
@@ -98,7 +99,10 @@ const businessWithDuration = (
     },
   });
 
-const setup = (config: ConfiguracionNegocio = business()) => {
+const setup = (
+  config: ConfiguracionNegocio = business(),
+  calendar?: ReservationCalendar,
+) => {
   const store = new MemoryConversationStore();
   const reservations = new MemoryReservationRepository();
   let conversationNumber = 0;
@@ -110,6 +114,7 @@ const setup = (config: ConfiguracionNegocio = business()) => {
       now: () => now,
       idFactory: () => `conversation-${++conversationNumber}`,
       reservations,
+      ...(calendar ? { calendar } : {}),
     }),
     input: (message: string) => ({
       business: config,
@@ -144,6 +149,384 @@ const seedConversation = (
 };
 
 describe('ConversationCoordinator', () => {
+  it('reconoce una reserva para mañana, explica el servicio y permite salir', async () => {
+    const { coordinator, input } = setup();
+
+    const bookingStarted = await coordinator.handleMessage(
+      input('Quisiera hacer una reserva para mañana'),
+    );
+    expect(bookingStarted.conversation.intent).toBe('book-appointment');
+    expect(bookingStarted.conversation.state).toBe('collecting-service');
+    expect(bookingStarted.conversation.data.requestedDate?.toISOString()).toBe(
+      '2026-10-16T00:00:00.000Z',
+    );
+
+    const availabilityAsked = await coordinator.handleMessage(
+      input('¿Tienes disponibilidad para mañana?'),
+    );
+    expect(availabilityAsked.conversation.state).toBe('collecting-service');
+    expect(availabilityAsked.conversation.data.requestedDate?.toISOString()).toBe(
+      '2026-10-16T00:00:00.000Z',
+    );
+    expect(availabilityAsked.reply).toMatch(/cada uno tiene una duración distinta/i);
+    expect(availabilityAsked.reply).toMatch(/¿qué servicio deseas agendar/i);
+
+    const exited = await coordinator.handleMessage(input('Salir'));
+    expect(exited.conversation.state).toBe('cancelled');
+    expect(exited.conversation.data).toEqual({});
+    expect(exited.reply).toMatch(/no se creó ninguna cita/i);
+  });
+
+  it('consulta otra fecha sin perder el servicio cuando el día está completo', async () => {
+    let availabilityChecks = 0;
+    let createdEvents = 0;
+    const calendar: ReservationCalendar = {
+      async listBusyAppointments(_business, from, to) {
+        availabilityChecks += 1;
+        const day = from.toISOString().slice(0, 10);
+        return day === '2026-10-16'
+          ? [
+              {
+                startsAt: from,
+                endsAt: to,
+                durationMinutes: 24 * 60,
+              },
+            ]
+          : [];
+      },
+      async createReservationEvent() {
+        createdEvents += 1;
+        return 'event-1';
+      },
+      async deleteReservationEvent() {},
+    };
+    const { coordinator, input } = setup(business(), calendar);
+
+    const fullDay = await coordinator.handleMessage(
+      input('¿Tienen disponibilidad para un corte de cabello mañana?'),
+    );
+    expect(fullDay.conversation.state).toBe('checking-availability');
+    expect(fullDay.conversation.intent).toBe('check-availability');
+    expect(fullDay.conversation.data.serviceId).toBe('cut-1');
+    expect(fullDay.nextField).toBe('requestedDate');
+    expect(fullDay.reply).toMatch(/no encuentro horarios disponibles/i);
+    expect(fullDay.reply).toMatch(/no he creado ninguna cita/i);
+
+    const nextDate = await coordinator.handleMessage(
+      input('¿Y para el lunes?'),
+    );
+    expect(nextDate.conversation.state).toBe('checking-availability');
+    expect(nextDate.conversation.data.serviceId).toBe('cut-1');
+    expect(nextDate.conversation.data.requestedDate?.toISOString()).toBe(
+      '2026-10-19T00:00:00.000Z',
+    );
+    expect(nextDate.reply).toMatch(/disponibilidad/i);
+    expect(availabilityChecks).toBe(2);
+    expect(createdEvents).toBe(0);
+  });
+
+  it('pide el servicio faltante y solo inicia la reserva cuando se solicita', async () => {
+    const { coordinator, input } = setup();
+
+    const missingService = await coordinator.handleMessage(
+      input('¿Tienen disponibilidad para mañana?'),
+    );
+    expect(missingService.conversation.state).toBe('checking-availability');
+    expect(missingService.nextField).toBe('serviceId');
+    expect(missingService.reply).toMatch(/¿para qué servicio/i);
+
+    const serviceProvided = await coordinator.handleMessage(
+      input('Corte de cabello'),
+    );
+    expect(serviceProvided.conversation.state).toBe('checking-availability');
+    expect(serviceProvided.conversation.data.serviceId).toBe('cut-1');
+    expect(serviceProvided.reply).toMatch(/disponibilidad/i);
+    expect(serviceProvided.reply).toMatch(/escribe \*agendar\*/i);
+
+    const bookingRequested = await coordinator.handleMessage(
+      input('Quiero iniciar una reserva'),
+    );
+    expect(bookingRequested.conversation.intent).toBe('book-appointment');
+    expect(bookingRequested.conversation.state).toBe('collecting-time');
+    expect(bookingRequested.conversation.data.serviceId).toBe('cut-1');
+    expect(bookingRequested.conversation.data.requestedDate?.toISOString()).toBe(
+      '2026-10-16T00:00:00.000Z',
+    );
+  });
+
+  it('consulta los periodos del día y conserva el periodo elegido', async () => {
+    const calendar: ReservationCalendar = {
+      async listBusyAppointments() {
+        return [
+          {
+            startsAt: new Date('2026-10-16T14:00:00.000Z'),
+            endsAt: new Date('2026-10-16T14:30:00.000Z'),
+            durationMinutes: 30,
+          },
+        ];
+      },
+      async createReservationEvent() {
+        return 'event-1';
+      },
+      async deleteReservationEvent() {},
+    };
+    const { coordinator, input } = setup(business(), calendar);
+
+    const periods = await coordinator.handleMessage(
+      input('Quiero un corte para mañana'),
+    );
+    expect(periods.nextField).toBe('requestedTime');
+    expect(periods.reply).toMatch(/mañana.*tarde/i);
+
+    const morning = await coordinator.handleMessage(
+      input('en la mañana'),
+    );
+    expect(morning.conversation.data.requestedTimeOfDay).toBe('morning');
+    expect(morning.reply).toMatch(/disponibilidad en la mañana/i);
+    expect(morning.reply).toMatch(/8:00/);
+  });
+
+  it('propone las horas más cercanas y revalida la elegida', async () => {
+    let newlyOccupied = false;
+    const calendar: ReservationCalendar = {
+      async listBusyAppointments() {
+        return [
+          {
+            startsAt: new Date('2026-10-16T21:00:00.000Z'),
+            endsAt: new Date('2026-10-16T21:30:00.000Z'),
+            durationMinutes: 30,
+          },
+          ...(newlyOccupied
+            ? [
+                {
+                  startsAt: new Date('2026-10-16T21:30:00.000Z'),
+                  endsAt: new Date('2026-10-16T22:00:00.000Z'),
+                  durationMinutes: 30,
+                },
+              ]
+            : []),
+        ];
+      },
+      async createReservationEvent() {
+        return 'event-1';
+      },
+      async deleteReservationEvent() {},
+    };
+    const { coordinator, input } = setup(business(), calendar);
+
+    await coordinator.handleMessage(input('Quiero un corte para mañana'));
+    const occupiedTime = await coordinator.handleMessage(input('4 pm'));
+    expect(occupiedTime.conversation.state).toBe('collecting-time');
+    expect(occupiedTime.reply).toMatch(/3:30.*4:30/);
+
+    newlyOccupied = true;
+    const selectedAlternative = await coordinator.handleMessage(
+      input('4:30 pm'),
+    );
+    expect(selectedAlternative.conversation.state).toBe('collecting-time');
+    expect(selectedAlternative.conversation.data.requestedTime).toBeUndefined();
+    expect(selectedAlternative.reply).toMatch(/ocupado/);
+  });
+
+  it('reutiliza la respuesta de un mensaje ya persistido al reintentarlo', async () => {
+    const { coordinator, input } = setup();
+    const message = {
+      ...input('Hola'),
+      messageId: 'whatsapp-message-1',
+      receivedAt: now,
+    };
+
+    const first = await coordinator.handleMessage(message);
+    const retried = await coordinator.handleMessage(message);
+
+    expect(retried.reply).toBe(first.reply);
+    expect(retried.conversation.messages).toHaveLength(2);
+    expect(
+      retried.conversation.messages[0].externalMessageId,
+    ).toBe('whatsapp-message-1');
+  });
+
+  it('revalida Calendar antes de confirmar y no confirma un hueco ocupado', async () => {
+    let occupied = false;
+    let createdEvents = 0;
+    const calendar: ReservationCalendar = {
+      async listBusyAppointments() {
+        return occupied
+          ? [
+              {
+                startsAt: new Date('2026-10-16T20:00:00.000Z'),
+                endsAt: new Date('2026-10-16T20:30:00.000Z'),
+                durationMinutes: 30,
+              },
+            ]
+          : [];
+      },
+      async createReservationEvent() {
+        createdEvents += 1;
+        return 'event-1';
+      },
+      async deleteReservationEvent() {},
+    };
+    const store = new MemoryConversationStore();
+    const reservations = new MemoryReservationRepository();
+    const coordinator = new ConversationCoordinator(store, {
+      now: () => now,
+      idFactory: () => 'calendar-conversation',
+      reservations,
+      calendar,
+    });
+    const input = (message: string) => ({
+      business: business(),
+      contactId: 'contact-1',
+      whatsappId: 'whatsapp-contact-1',
+      message,
+    });
+
+    await coordinator.handleMessage(
+      input('Quiero un corte mañana a las 3 de la tarde'),
+    );
+    const complete = await coordinator.handleMessage(input('Ana Pérez'));
+    expect(complete.conversation.state).toBe('awaiting-confirmation');
+
+    await coordinator.handleMessage(input('sí'));
+    occupied = true;
+    const finalAttempt = await coordinator.handleMessage(input('sí'));
+
+    expect(finalAttempt.conversation.state).toBe('collecting-time');
+    expect(finalAttempt.conversation.data.requestedTime).toBeUndefined();
+    expect(finalAttempt.reply).toMatch(/ocupad|disponible/i);
+    expect(createdEvents).toBe(0);
+    await expect(
+      reservations.getById('reservation:calendar-conversation'),
+    ).resolves.toBeNull();
+  });
+
+  it('sincroniza la cancelación con Calendar antes de cambiar el estado local', async () => {
+    let deletedReservationId: string | undefined;
+    let deleteAttempts = 0;
+    const calendar: ReservationCalendar = {
+      async listBusyAppointments() {
+        return [];
+      },
+      async createReservationEvent() {
+        return 'event-1';
+      },
+      async deleteReservationEvent(_business, reservation) {
+        deleteAttempts += 1;
+        if (deleteAttempts === 1) {
+          throw new Error('Calendar temporalmente no disponible');
+        }
+        deletedReservationId = reservation.id;
+      },
+    };
+    const store = new MemoryConversationStore();
+    const reservations = new MemoryReservationRepository();
+    await reservations.create({
+      id: 'existing-reservation',
+      businessId: 'business-1',
+      contactId: 'contact-1',
+      whatsappId: 'whatsapp-contact-1',
+      customerName: 'Ana Pérez',
+      serviceId: 'cut-1',
+      startsAt: new Date('2026-10-16T20:00:00.000Z'),
+      endsAt: new Date('2026-10-16T20:30:00.000Z'),
+      status: 'confirmed',
+      createdAt: now,
+      updatedAt: now,
+    });
+    const coordinator = new ConversationCoordinator(store, {
+      now: () => now,
+      idFactory: () => 'cancellation-conversation',
+      reservations,
+      calendar,
+    });
+    const input = (message: string) => ({
+      business: business(),
+      contactId: 'contact-1',
+      whatsappId: 'whatsapp-contact-1',
+      message,
+    });
+
+    await coordinator.handleMessage(input('Quiero cancelar mi cita'));
+    await expect(
+      coordinator.handleMessage(input('Sí, cancelar')),
+    ).rejects.toThrow(/temporalmente no disponible/i);
+    await expect(
+      reservations.getById('existing-reservation'),
+    ).resolves.toMatchObject({ status: 'confirmed' });
+
+    await coordinator.handleMessage(input('Sí, cancelar'));
+
+    expect(deletedReservationId).toBe('existing-reservation');
+    expect(deleteAttempts).toBe(2);
+    await expect(
+      reservations.getById('existing-reservation'),
+    ).resolves.toMatchObject({ status: 'cancelled' });
+  });
+
+  it('no anuncia una cita ante un fallo de Calendar y reintenta sin duplicar la reserva', async () => {
+    let attempts = 0;
+    const calendar: ReservationCalendar = {
+      async listBusyAppointments() {
+        return [];
+      },
+      async createReservationEvent() {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new Error('Calendar temporalmente no disponible');
+        }
+        return 'event-1';
+      },
+      async deleteReservationEvent() {},
+    };
+    const store = new MemoryConversationStore();
+    const reservations = new MemoryReservationRepository();
+    const coordinator = new ConversationCoordinator(store, {
+      now: () => now,
+      idFactory: () => 'calendar-retry',
+      reservations,
+      calendar,
+    });
+    const input = (message: string, messageId?: string) => ({
+      business: business(),
+      contactId: 'contact-1',
+      whatsappId: 'whatsapp-contact-1',
+      ...(messageId ? { messageId, receivedAt: now } : {}),
+      message,
+    });
+
+    await coordinator.handleMessage(
+      input('Quiero un corte mañana a las 3 de la tarde'),
+    );
+    await coordinator.handleMessage(input('Ana Pérez'));
+    await coordinator.handleMessage(input('sí'));
+
+    await expect(
+      coordinator.handleMessage(input('sí', 'final-confirmation')),
+    ).rejects.toThrow(/temporalmente no disponible/i);
+    await expect(
+      reservations.getById('reservation:calendar-retry'),
+    ).resolves.toMatchObject({ status: 'pending' });
+
+    const retried = await coordinator.handleMessage(
+      input('sí', 'final-confirmation'),
+    );
+    const duplicate = await coordinator.handleMessage(
+      input('sí', 'final-confirmation'),
+    );
+
+    expect(retried.conversation.state).toBe('awaiting-acknowledgment');
+    expect(retried.reply).toMatch(/quedó confirmada/i);
+    expect(duplicate.reply).toBe(retried.reply);
+    expect(attempts).toBe(2);
+    await expect(
+      reservations.getById('reservation:calendar-retry'),
+    ).resolves.toMatchObject({
+      status: 'confirmed',
+      googleCalendarEventId: 'event-1',
+    });
+  });
+
   it('inicia una conversación y pide el servicio', async () => {
     const { store, coordinator, input } = setup();
     const result = await coordinator.handleMessage(
@@ -218,6 +601,60 @@ describe('ConversationCoordinator', () => {
     expect(name.reply).toMatch(/confirmas/i);
   });
 
+  it('pide el nuevo servicio cuando se solicita cambiarlo sin indicar cuál', async () => {
+    const { coordinator, input } = setup();
+    await coordinator.handleMessage(
+      input('Quiero un corte mañana a las 3 pm'),
+    );
+
+    const result = await coordinator.handleMessage(
+      input('Quiero cambiar el servicio'),
+    );
+
+    expect(result.conversation.state).toBe('collecting-service');
+    expect(result.nextField).toBe('serviceId');
+    expect(result.reply).toMatch(/¿Qué servicio deseas agendar/u);
+    expect(result.conversation.data).toMatchObject({
+      requestedDate: new Date('2026-10-16T00:00:00.000Z'),
+      requestedTime: '15:00',
+    });
+    expect(result.conversation.data.serviceId).toBeUndefined();
+  });
+
+  it('pide la nueva fecha si se solicita cambiarla sin indicar el día', async () => {
+    const { coordinator, input } = setup();
+    await coordinator.handleMessage(
+      input('Quiero un corte mañana a las 3 pm'),
+    );
+
+    const result = await coordinator.handleMessage(
+      input('Quiero cambiar la fecha'),
+    );
+
+    expect(result.conversation.state).toBe('collecting-date');
+    expect(result.nextField).toBe('requestedDate');
+    expect(result.reply).toMatch(/¿Para qué fecha/u);
+    expect(result.conversation.data).toMatchObject({
+      serviceId: 'cut-1',
+      requestedTime: '15:00',
+    });
+    expect(result.conversation.data.requestedDate).toBeUndefined();
+  });
+
+  it('no borra datos cuando el cliente niega que quiera cambiar el servicio', async () => {
+    const { coordinator, input } = setup();
+    const initial = await coordinator.handleMessage(
+      input('Quiero un corte mañana a las 3 pm'),
+    );
+
+    const result = await coordinator.handleMessage(
+      input('No quiero cambiar el servicio'),
+    );
+
+    expect(result.conversation.data).toEqual(initial.conversation.data);
+    expect(result.nextField).toBe('customerName');
+  });
+
   it.each([
     [
       'Quiero un corte de cabello mañana a las 3 de la tarde, me llamo Carlos',
@@ -277,6 +714,31 @@ describe('ConversationCoordinator', () => {
       });
       expect(service.conversation.state).toBe('collecting-date');
       expect(service.nextField).toBe('requestedDate');
+    },
+  );
+
+  it.each([
+    'Hola, me llamo Sara y quiero agendar una cita para mañana a las 3 pm',
+    'Quiero agendar una cita para mañana a las 3 pm, hola, mi nombre es Sara',
+  ])(
+    'conserva datos mezclados y pide solo el servicio faltante: "%s"',
+    async (message) => {
+      const { coordinator, input } = setup();
+
+      const result = await coordinator.handleMessage(input(message));
+
+      expect(result.conversation.data).toEqual({
+        customerName: 'Sara',
+        requestedDate: new Date('2026-10-16T00:00:00.000Z'),
+        requestedTime: '15:00',
+      });
+      expect(result.conversation.state).toBe('collecting-service');
+      expect(result.nextField).toBe('serviceId');
+      expect(result.reply).toMatch(/servicio/i);
+      expect(result.reply).not.toMatch(/¡Hola! 👋 Bienvenido/i);
+      expect(getPendingReservationFields(result.conversation.data)).toEqual([
+        'serviceId',
+      ]);
     },
   );
 
@@ -866,6 +1328,21 @@ describe('ConversationCoordinator', () => {
     expect(result.conversation.data).toEqual({ serviceId: 'cut-1' });
     expect(result.nextField).toBe('requestedDate');
     expect(result.reply).toMatch(/fecha/i);
+  });
+
+  it('explica el dato faltante y conserva datos válidos ante un mensaje de cortesía', async () => {
+    const { coordinator, input } = setup();
+    await coordinator.handleMessage(input('Quiero un corte'));
+
+    const result = await coordinator.handleMessage(input('gracias'));
+
+    expect(result.conversation.state).toBe('collecting-date');
+    expect(result.conversation.data).toEqual({ serviceId: 'cut-1' });
+    expect(result.nextField).toBe('requestedDate');
+    expect(result.reply).toMatch(/no logré reconocer ese dato/i);
+    expect(result.reply).toMatch(/conservo estos datos válidos/i);
+    expect(result.reply).toMatch(/servicio: ya registrado/i);
+    expect(result.reply).toMatch(/fecha válida/i);
   });
 
   it('no usa una consulta de precios como respuesta al campo pendiente', async () => {

@@ -64,16 +64,76 @@ const createCoordinator = (storage: SqliteStorage, id: string) =>
 const send = (
   coordinator: ConversationCoordinator,
   message: string,
+  messageId?: string,
 ) =>
   coordinator.handleMessage({
     business,
     contactId,
     whatsappId: contactId,
     customerPhone: '',
+    ...(messageId ? { messageId, receivedAt: now } : {}),
     message,
   });
 
 describe('flujo conversacional con SQLite', () => {
+  it('reutiliza una respuesta deduplicada después de reabrir SQLite', async () => {
+    const path = await createDatabasePath();
+    const firstStorage = openStorage(path);
+    const firstCoordinator = createCoordinator(firstStorage, 'first-session');
+    const first = await send(firstCoordinator, 'Hola', 'whatsapp-message-1');
+    firstStorage.close();
+    openedStorages.splice(openedStorages.indexOf(firstStorage), 1);
+
+    const reopenedStorage = openStorage(path);
+    const reopenedCoordinator = createCoordinator(
+      reopenedStorage,
+      'different-session',
+    );
+    const retry = await send(
+      reopenedCoordinator,
+      'Hola',
+      'whatsapp-message-1',
+    );
+
+    expect(retry.reply).toBe(first.reply);
+    expect(retry.conversation.id).toBe('first-session');
+    expect(retry.conversation.messages).toHaveLength(2);
+    expect(retry.conversation.messages[0].externalMessageId).toBe(
+      'whatsapp-message-1',
+    );
+  });
+
+  it('reanuda una consulta de disponibilidad después de reabrir SQLite', async () => {
+    const path = await createDatabasePath();
+    const firstStorage = openStorage(path);
+    const firstCoordinator = createCoordinator(firstStorage, 'availability-1');
+    const initial = await send(
+      firstCoordinator,
+      '¿Tienen disponibilidad para mañana?',
+    );
+    expect(initial.conversation.state).toBe('checking-availability');
+    expect(initial.conversation.data.requestedDate?.toISOString()).toBe(
+      '2026-10-16T00:00:00.000Z',
+    );
+    firstStorage.close();
+    openedStorages.splice(openedStorages.indexOf(firstStorage), 1);
+
+    const reopenedStorage = openStorage(path);
+    const reopenedCoordinator = createCoordinator(
+      reopenedStorage,
+      'availability-2',
+    );
+    const resumed = await send(reopenedCoordinator, 'Corte de cabello');
+
+    expect(resumed.conversation.id).toBe('availability-1');
+    expect(resumed.conversation.state).toBe('checking-availability');
+    expect(resumed.conversation.data.serviceId).toBe('cut-1');
+    expect(resumed.conversation.data.requestedDate?.toISOString()).toBe(
+      '2026-10-16T00:00:00.000Z',
+    );
+    expect(resumed.reply).toMatch(/disponibilidad/i);
+  });
+
   it('mantiene la cita y la cancelación pendiente después de reiniciar el motor', async () => {
     const path = await createDatabasePath();
     const firstStorage = openStorage(path);

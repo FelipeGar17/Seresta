@@ -31,6 +31,8 @@ export interface AppointmentOccupancy {
 export interface ExistingAppointment {
   startsAt: Date;
   durationMinutes: number;
+  // External calendars can return busy ranges that are not block-aligned.
+  endsAt?: Date;
 }
 
 export interface TimeInterval {

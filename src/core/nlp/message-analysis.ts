@@ -17,6 +17,7 @@ import {
 
 export interface MessageAnalysisOptions {
   lastBotQuestion?: string;
+  shortReplyContext?: 'booking-confirmation';
   now?: Date;
   timeZone?: string;
 }
@@ -45,6 +46,7 @@ export function analyzeMessageWithCatalog(
   const spelling = correctSpelling(message);
   const detection = detectIntentDetailed(spelling.text, {
     lastBotQuestion: options.lastBotQuestion,
+    shortReplyContext: options.shortReplyContext,
     services: catalog,
   });
   const entities = extractEntities(spelling.text, {

@@ -35,5 +35,22 @@ export function initializeSqliteSchema(database: SqliteDatabase): void {
 
     CREATE INDEX IF NOT EXISTS cancelled_reservations_by_date
       ON reservations (status, cancelled_at);
+
+    CREATE TABLE IF NOT EXISTS whatsapp_inbox (
+      sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+      message_id TEXT NOT NULL UNIQUE,
+      business_id TEXT NOT NULL,
+      contact_id TEXT NOT NULL,
+      whatsapp_id TEXT,
+      customer_phone TEXT,
+      body TEXT NOT NULL,
+      received_at TEXT NOT NULL,
+      status TEXT NOT NULL,
+      reply TEXT,
+      failed_attempts INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS whatsapp_inbox_by_contact
+      ON whatsapp_inbox (contact_id, sequence, status);
   `);
 }

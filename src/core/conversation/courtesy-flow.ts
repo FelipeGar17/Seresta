@@ -24,12 +24,12 @@ const getReply = (
   business: ConfiguracionNegocio,
 ): string => {
   if (intent === 'greeting') {
-    return `¡Hola! Bienvenido a ${business.name}. ${getEntryOptionsReply()}`;
+    return `¡Hola! 👋 Bienvenido a ${business.name}.\n\n${getEntryOptionsReply()}`;
   }
   if (intent === 'thanks') {
-    return `¡Con gusto! ${getEntryOptionsReply()}`;
+    return `😊 ¡Con gusto!\n\n${getEntryOptionsReply()}`;
   }
-  return `¡Hasta luego! Cuando quieras, aquí estaré para ayudarte.`;
+  return '¡Hasta luego! 👋 Cuando quieras, aquí estaré.';
 };
 
 export function handleCourtesyFlow(input: CourtesyFlowInput): FlowReply {

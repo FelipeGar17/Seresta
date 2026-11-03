@@ -14,6 +14,14 @@ export const getLastBotQuestion = (
     .reverse()
     .find((message) => message.direction === 'outgoing')?.text;
 
+export const getShortReplyContext = (
+  conversation: Conversation,
+): 'booking-confirmation' | undefined =>
+  conversation.state === 'awaiting-confirmation' ||
+  conversation.state === 'awaiting-final-confirmation'
+    ? 'booking-confirmation'
+    : undefined;
+
 export const appendTurnMessages = (
   conversation: Conversation,
   incomingText: string,

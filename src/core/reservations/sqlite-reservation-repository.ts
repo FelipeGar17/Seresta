@@ -77,6 +77,60 @@ export class SqliteReservationRepository implements ReservationRepository {
     return existing;
   }
 
+  async createPendingIfAvailable(reservation: Reservation): Promise<boolean> {
+    if (reservation.status !== 'pending') {
+      throw new Error('Only pending reservations can claim an available slot');
+    }
+
+    const createIfAvailable = this.database.transaction(() => {
+      const current = this.database
+        .prepare('SELECT status FROM reservations WHERE id = ?')
+        .get(reservation.id) as { status: string } | undefined;
+      if (current) return true;
+
+      const rows = this.database
+        .prepare(
+          `SELECT id, payload
+           FROM reservations
+           WHERE business_id = ? AND status IN ('pending', 'confirmed')`,
+        )
+        .all(reservation.businessId) as {
+        id: string;
+        payload: string;
+      }[];
+
+      for (const row of rows) {
+        const existing = decodeReservation(row.payload);
+        if (
+          existing.startsAt < reservation.endsAt &&
+          existing.endsAt > reservation.startsAt
+        ) {
+          return false;
+        }
+      }
+
+      this.database
+        .prepare(
+          `INSERT INTO reservations (
+            id, business_id, contact_id, status, starts_at, cancelled_at, payload
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          reservation.id,
+          reservation.businessId,
+          reservation.contactId,
+          reservation.status,
+          reservation.startsAt.toISOString(),
+          reservation.cancelledAt?.toISOString() ?? null,
+          JSON.stringify(reservation),
+        );
+
+      return true;
+    });
+
+    return createIfAvailable();
+  }
+
   async getById(id: Identifier): Promise<Reservation | null> {
     const row = this.database
       .prepare('SELECT payload FROM reservations WHERE id = ?')
@@ -105,6 +159,27 @@ export class SqliteReservationRepository implements ReservationRepository {
     }[];
 
     return rows.map(({ payload }) => decodeReservation(payload));
+  }
+
+  async listBlockingAppointments(
+    businessId: Identifier,
+    from: Date,
+    to: Date,
+  ): Promise<Reservation[]> {
+    const rows = this.database
+      .prepare(
+        `SELECT payload
+         FROM reservations
+         WHERE business_id = ?
+           AND status IN ('pending', 'confirmed')
+           AND starts_at < ?
+         ORDER BY starts_at`,
+      )
+      .all(businessId, to.toISOString()) as { payload: string }[];
+
+    return rows
+      .map(({ payload }) => decodeReservation(payload))
+      .filter((reservation) => reservation.endsAt > from);
   }
 
   async update(reservation: Reservation): Promise<void> {

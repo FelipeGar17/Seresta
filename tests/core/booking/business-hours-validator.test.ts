@@ -114,6 +114,23 @@ describe('validateBusinessHours', () => {
     });
   });
 
+  it('rechaza una hora del mismo día que ya pasó en la zona del negocio', () => {
+    const thursdayBusiness: ConfiguracionNegocio = {
+      ...business,
+      businessHours: {
+        ...business.businessHours,
+        thursday: [{ opensAt: '08:00', closesAt: '18:00' }],
+      },
+    };
+    const result = validateBusinessHours(thursdayBusiness, {
+      startsAt: startsAt('2026-10-29', '16:00'),
+      durationMinutes: 60,
+      now: new Date('2026-10-30T04:00:00.000Z'),
+    });
+
+    expect(result).toMatchObject({ valid: false, reason: 'past-time' });
+  });
+
   it('rechaza una fecha fuera del horizonte usando la política existente', () => {
     const result = validate(
       '2026-10-30',

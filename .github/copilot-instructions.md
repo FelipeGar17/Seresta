@@ -8,6 +8,7 @@ Ejecuta los comandos desde la raíz del repositorio:
 npm install
 npm run build
 npm test
+npm start
 ```
 
 - `npm run build`: compila TypeScript con `tsconfig.json` en modo estricto y
@@ -20,11 +21,17 @@ npm test
 - `npm run intent:console`: abre la consola manual para escribir mensajes y
   ver intención, puntaje, coincidencias y entidades.
 - `npm run whatsapp:test` y `npm run whatsapp:message-test`: ejecutan pruebas
-  manuales de WhatsApp Web y requieren la sesión local correspondiente.
-- `npm run test:gcal-auth` y `npm run test:gcal`: ejecutan las pruebas
-  manuales de Google Calendar y requieren credenciales OAuth locales.
-- `npm run test:wa-gcal`: ejecuta el flujo integrado WhatsApp + Google
-  Calendar. Revisa `Guia de Pruebas.md` antes de usarlo.
+  manuales aisladas de WhatsApp Web y requieren la sesión local
+  correspondiente.
+- `npm run calendar:auth`: autoriza Google Calendar con OAuth local; requiere
+  `.google_auth/client_secret.json`.
+- `npm run test:gcal`: ejecuta pruebas unitarias simuladas del adaptador, sin
+  llamar a Google.
+- `npm run dev`: inicia el runtime integrado; requiere `BUSINESS_CONFIG_PATH`,
+  OAuth de Calendar y la sesión local de WhatsApp.
+- `npm start`: compila e inicia el runtime integrado; valida `negocio.json` por
+  defecto (o `BUSINESS_CONFIG_PATH`), comprueba la conexión al calendario y
+  espera a que WhatsApp esté listo.
 
 No hay un script de lint configurado. Usa `npm run build`, Vitest y los
 diagnósticos de TypeScript como validación del código.
@@ -39,7 +46,13 @@ El proyecto separa el motor central de los servicios externos:
   implementaciones no deben conocer WhatsApp, Google Calendar ni la interfaz
   de usuario.
 - `src/core/conversation/memory-store.ts` implementa el almacenamiento temporal
-  con `Map`. Es reemplazable por SQLite cuando se implemente persistencia.
+  con `Map`; el runtime usa `src/core/conversation/sqlite-store.ts`.
+- `src/core/messaging/` define la bandeja SQLite, la deduplicación persistente
+  por ID de mensaje, el FIFO por contacto y la recuperación de respuestas
+  pendientes.
+- `src/connectors/whatsapp/` y `src/connectors/google-calendar/` aíslan los
+  adaptadores externos. El núcleo depende de sus contratos en
+  `src/core/reservations/`.
 - `src/core/nlp/normalize.ts` separa la normalización para intención de la
   normalización para extracción. La primera puede ser agresiva; la segunda
   debe conservar datos como `ñ`, fechas con `/` y horas con `:`.

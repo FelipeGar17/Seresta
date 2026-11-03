@@ -23,6 +23,7 @@ import {
 
 export type BusinessHoursValidationReason =
   | BookingDateFailureReason
+  | 'past-time'
   | 'insufficient-notice'
   | 'exceptional-closure'
   | 'closed-day'
@@ -120,9 +121,12 @@ export function validateBusinessHours(
     return { valid: false, reason: dateResult.reason };
   }
 
+  if (input.startsAt.getTime() <= now.getTime()) {
+    return { valid: false, reason: 'past-time' };
+  }
+
   const minimumNotice = business.bookingPolicy?.minimumNoticeMinutes ?? 0;
   if (
-    !isValidDate(now) ||
     input.startsAt.getTime() < now.getTime() + minimumNotice * 60_000
   ) {
     return { valid: false, reason: 'insufficient-notice' };

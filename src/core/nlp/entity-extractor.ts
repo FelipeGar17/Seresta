@@ -199,7 +199,7 @@ const NAME_PATTERN = /^[\p{L}\p{M}][\p{L}\p{M}' .-]{1,79}$/u;
 const NAME_PREFIX_PATTERN =
   /\b(?:me\s+llamo|me\s+dicen|mi\s+nombre\s+es|el\s+nombre\s+es|a\s+nombre\s+de|soy|(?:cambi\w+|modific\w+|corrig\w+)\s+(?:el\s+)?nombre\s+(?:a|por|para|de))\s+([^,.;!?]+)/iu;
 const NAME_CLAUSE_END_PATTERN =
-  /\s+(?:y\s+)?(?:quiero|deseo|necesito|voy|agendar|reservar|solicitar|cambiar)\b/iu;
+  /\s+(?:y\s+)?(?:quiero|quisiera|deseo|necesito|tengo|voy|agendar|reservar|solicitar|cambiar|cancelar|confirmar|reprogramar|consultar|preguntar|pregunta|mi\s+cita(?:\s+es)?|la\s+cita(?:\s+es)?|es\s+para|para\s+(?:hoy|mañana|manana|pasado\s+mañana|pasado\s+manana|el\s+[\p{L}\p{M}]+)|a\s+las\s+\d{1,2}(?::\d{2})?|en\s+la\s+(?:mañana|manana|tarde|noche)|por\s+la\s+(?:mañana|manana|tarde|noche))\b/iu;
 // Introducciones conversacionales que no forman parte del nombre
 // ("de Sara", "es Sara", "a nombre de Sara", "para Sara").
 const NAME_LEADING_PATTERN =
@@ -334,10 +334,7 @@ export function extractEntities(
   const { text } = splitEmojis(normalizeForExtraction(message));
   const normalizedMessage = text.toLowerCase();
   const matchingMessage = normalizedMessage.replace(/ñ/gu, 'n');
-  const dateCandidateText = (
-    options.normalizedIntent ?? normalizeIntent(text)
-  ).replace(/ñ/gu, 'n');
-  const datePhrase = matchDatePhrase(dateCandidateText);
+  const datePhrase = matchDatePhrase(text, options.normalizedIntent);
 
   // Una repetición ("los martes") no es una fecha única: se reporta aparte.
   const relativeDate =

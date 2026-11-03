@@ -37,6 +37,16 @@ describe('extractEntities', () => {
     });
   });
 
+  it.each([
+    ['Quiero cita para el 6 de noviembre a las 3 pm', '2026-11-06T00:00:00.000Z'],
+    ['Quiero cita para el 27/11/2026 a las 3 pm', '2026-11-27T00:00:00.000Z'],
+  ])('extracts date and time together from "%s"', (message, date) => {
+    expect(extractEntities(message, { now })).toMatchObject({
+      date: new Date(date),
+      time: '15:00',
+    });
+  });
+
   it('extracts Spanish afternoon and morning period expressions', () => {
     expect(
       extractEntities('Mañana a las 3 de la tarde', { now }),
@@ -297,6 +307,8 @@ describe('extractEntities', () => {
     ['Soy María José', 'María José'],
     ['mi nombre es carlos y quiero agendar un corte de pelo mañana a las 3 pm', 'Carlos'],
     ['Quiero un corte mañana a las 3 de la tarde, me llamo Carlos', 'Carlos'],
+    ['me llamo Sara y tengo una pregunta', 'Sara'],
+    ['me llamo Ana y mi cita es para el jueves', 'Ana'],
   ])('extrae el nombre explícito de %j', (message, expected) => {
     expect(extractEntities(message, { now, services }).customerName).toBe(
       expected,
@@ -315,6 +327,18 @@ describe('extractEntities', () => {
       service: services[0],
     });
     expect(entities.relativeDate).toBe('manana');
+    expect(entities.time).toBe('15:00');
+  });
+
+  it('extrae saludo + nombre + intención + fecha + hora en un mensaje reordenado', () => {
+    const entities = extractEntities(
+      'Hola, me llamo Sara y quiero agendar una cita para mañana a las 3 pm',
+      { now, services },
+    );
+
+    expect(entities.customerName).toBe('Sara');
+    expect(entities.relativeDate).toBe('manana');
+    expect(entities.date).toEqual(new Date('2026-10-16T00:00:00.000Z'));
     expect(entities.time).toBe('15:00');
   });
 

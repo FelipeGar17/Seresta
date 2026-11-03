@@ -10,9 +10,14 @@ import {
   intentSynonyms,
   type IntentRuleName,
 } from './synonyms.js';
+import {
+  decideIntent,
+  type IntentPolicyDecision,
+} from './intent-policy.js';
 
 export interface IntentDetectionOptions {
   lastBotQuestion?: string;
+  shortReplyContext?: 'booking-confirmation';
   // Catálogo de servicios del negocio. Cuando está presente (incluso vacío)
   // el catálogo es la única fuente de verdad sobre qué es un servicio; sin
   // catálogo el detector solo puede usar patrones genéricos.
@@ -34,6 +39,7 @@ export interface DetailedIntentDetection {
   negated: boolean;
   negatedIntents: ConversationIntent[];
   normalized: string;
+  decision: IntentPolicyDecision;
 }
 
 type RuleName = IntentRuleName;
@@ -106,13 +112,18 @@ const CONFIRMATION_QUESTION = /\b(?:confirm\w*|acept\w*)/u;
 
 const contextualShortReply = (
   normalized: string,
+  shortReplyContext: IntentDetectionOptions['shortReplyContext'],
   lastBotQuestion: string | undefined,
 ): ConversationIntent | undefined => {
-  if (!lastBotQuestion) return undefined;
-
   const isAffirmative = AFFIRMATIVE_REPLY.test(normalized);
   const isNegative = NEGATIVE_REPLY.test(normalized);
   if (!isAffirmative && !isNegative) return undefined;
+
+  if (shortReplyContext === 'booking-confirmation') {
+    return isNegative ? 'reject-appointment' : 'confirm-appointment';
+  }
+
+  if (!lastBotQuestion) return undefined;
 
   const question = normalizeIntent(lastBotQuestion);
   if (CONFIRMATION_QUESTION.test(question)) {
@@ -145,18 +156,21 @@ export function detectIntentDetailed(
   const normalized = normalizeIntent(message);
   const contextualIntent = contextualShortReply(
     normalized,
+    options.shortReplyContext,
     options.lastBotQuestion,
   );
   if (contextualIntent) {
+    const intents = [contextualIntent];
     return {
       intent: contextualIntent,
-      intents: [contextualIntent],
+      intents,
       score: 1,
       matched: [normalized],
       frames: [],
       negated: false,
       negatedIntents: [],
       normalized,
+      decision: decideIntent(contextualIntent, intents),
     };
   }
 
@@ -239,15 +253,19 @@ export function detectIntentDetailed(
       left.priority - right.priority,
   );
 
+  const intent = ranked[0]?.intent ?? 'unknown';
+  const intents = ranked.map(({ intent }) => intent);
+
   return {
-    intent: ranked[0]?.intent ?? 'unknown',
-    intents: ranked.map(({ intent }) => intent),
+    intent,
+    intents,
     score: ranked[0]?.score ?? 0,
     matched: ranked[0]?.matched ?? [],
     frames: [...catalogDetection.frames, ...genericDetection.frames],
     negated: negatedIntents.length > 0,
     negatedIntents,
     normalized,
+    decision: decideIntent(intent, intents),
   };
 }
 

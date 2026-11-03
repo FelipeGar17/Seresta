@@ -263,7 +263,7 @@ describe('disponibilidad con intervalo y bloques', () => {
       validateAppointmentAvailability(config, {
         startsAt: at('2026-10-19', '15:00', config),
         durationMinutes: 30,
-        now: new Date('2026-10-19T20:00:00.000Z'),
+        now: new Date('2026-10-19T19:59:00.000Z'),
       }),
     ).toMatchObject({
       valid: false,
@@ -338,6 +338,29 @@ describe('disponibilidad con intervalo y bloques', () => {
     expect(result.alternatives?.[0].toISOString()).toBe(
       at('2026-10-19', '16:00', config).toISOString(),
     );
+  });
+
+  it('ordena las alternativas por cercanía y favorece la hora anterior en empate', () => {
+    const config = business();
+    const result = validate(
+      at('2026-10-19', '16:00', config),
+      30,
+      config,
+      {
+        existingAppointments: [
+          {
+            startsAt: at('2026-10-19', '16:00', config),
+            durationMinutes: 30,
+          },
+        ],
+      },
+    );
+
+    expect(result.alternatives?.slice(0, 2).map((date) => date.toISOString()))
+      .toEqual([
+        at('2026-10-19', '15:30', config).toISOString(),
+        at('2026-10-19', '16:30', config).toISOString(),
+      ]);
   });
 
   it('no altera el resumen canónico ni el final real del servicio', () => {

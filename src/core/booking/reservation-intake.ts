@@ -56,6 +56,9 @@ export function analyzeReservationMessage(
   } else if (analysis.entities.ambiguousTime) {
     data.ambiguousTime = analysis.entities.ambiguousTime;
   }
+  if (!analysis.entities.time && analysis.entities.timeOfDay) {
+    data.requestedTimeOfDay = analysis.entities.timeOfDay;
+  }
 
   if (data.requestedDate && data.requestedTime) {
     const startsAt = combineDateAndTime(

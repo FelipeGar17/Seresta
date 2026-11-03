@@ -18,9 +18,9 @@ export const isCatalogIntent = (
   intent === 'list-services' || intent === 'check-prices';
 
 const describeService = (service: Service): string =>
-  `• ${service.name}: ${formatPrice(service.price)} (${formatDuration(
+  `• ${service.name}: ${formatPrice(service.price)} · ${formatDuration(
     service.durationMinutes,
-  )})`;
+  )}`;
 
 const listServices = (services: readonly Service[]): string =>
   services.map(describeService).join('\n');
@@ -38,7 +38,7 @@ export function buildCatalogReply(
   const activeServices = business.services.filter((service) => service.active);
 
   if (activeServices.length === 0) {
-    return 'Por ahora no tengo servicios configurados para mostrarte.';
+    return 'ℹ️ Por ahora no hay servicios configurados para mostrarte.';
   }
 
   const match = analysis.entities.serviceMatch;
@@ -46,7 +46,7 @@ export function buildCatalogReply(
 
   if (resolution?.status === 'ambiguous') {
     return [
-      'Tengo varios servicios que podrían coincidir con tu consulta:',
+      '🔎 Tengo varias opciones:',
       listServices(resolution.candidates),
       '',
       '¿Sobre cuál quieres saber?',
@@ -66,8 +66,8 @@ export function buildCatalogReply(
     if (related.length > 0) {
       return [
         related.length === 1
-          ? 'Tengo este servicio relacionado con tu consulta:'
-          : 'Tengo varios servicios que podrían coincidir con tu consulta:',
+          ? '🔎 Encontré este servicio relacionado:'
+          : '🔎 Tengo varias opciones:',
         listServices(related),
         '',
         related.length === 1
@@ -81,18 +81,18 @@ export function buildCatalogReply(
     const { service } = resolution;
 
     if (intent === 'list-services') {
-      return `Sí, ofrecemos ${service.name}.\n${describeService(service)}`;
+      return `✅ Sí, ofrecemos ${service.name}:\n${describeService(service)}`;
     }
 
-    return `${service.name} cuesta ${formatPrice(service.price)} y dura ${formatDuration(
+    return `💰 ${service.name}: ${formatPrice(service.price)} · ${formatDuration(
       service.durationMinutes,
     )}.`;
   }
 
   const heading =
     intent === 'check-prices'
-      ? 'Estos son nuestros servicios y precios:'
-      : 'Estos son los servicios que ofrecemos:';
+      ? '💰 Servicios y precios:'
+      : '✨ Servicios disponibles:';
 
   return `${heading}\n${listServices(activeServices)}`;
 }

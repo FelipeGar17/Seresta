@@ -96,6 +96,50 @@ describe('SqliteReservationRepository', () => {
     ).resolves.toEqual([reservation()]);
   });
 
+  it('reserva atómicamente el hueco y rechaza colisiones', async () => {
+    const storage = openStorage(await createDatabasePath());
+    const first = reservation({ status: 'pending' });
+    const contender = reservation({
+      id: 'reservation-2',
+      contactId: 'another@lid',
+      startsAt: new Date('2026-10-16T20:15:00.000Z'),
+      endsAt: new Date('2026-10-16T20:45:00.000Z'),
+      status: 'pending',
+    });
+
+    await expect(
+      storage.reservations.createPendingIfAvailable(first),
+    ).resolves.toBe(true);
+    await expect(
+      storage.reservations.createPendingIfAvailable(contender),
+    ).resolves.toBe(false);
+    await expect(
+      storage.reservations.createPendingIfAvailable(
+        reservation({
+          id: 'adjacent-reservation',
+          startsAt: first.endsAt,
+          endsAt: new Date('2026-10-16T21:00:00.000Z'),
+          status: 'pending',
+        }),
+      ),
+    ).resolves.toBe(true);
+  });
+
+  it('permite solo una reserva entre dos solicitudes simultáneas', async () => {
+    const storage = openStorage(await createDatabasePath());
+    const contenders = ['one', 'two'].map((id) =>
+      reservation({ id, status: 'pending' }),
+    );
+
+    const results = await Promise.all(
+      contenders.map((item) =>
+        storage.reservations.createPendingIfAvailable(item),
+      ),
+    );
+
+    expect(results.filter(Boolean)).toHaveLength(1);
+  });
+
   it('conserva y depura cancelaciones según su cancelledAt', async () => {
     const storage = openStorage(await createDatabasePath());
     const oldCancellation = reservation({

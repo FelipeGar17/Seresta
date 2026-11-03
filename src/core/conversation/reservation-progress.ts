@@ -80,6 +80,7 @@ export function mergeReservationData(
   if (isPresent(incoming.requestedTime)) {
     merged.requestedTime = incoming.requestedTime;
     delete merged.ambiguousTime;
+    delete merged.requestedTimeOfDay;
   } else if (incoming.ambiguousTime) {
     // Una hora ambigua reemplaza a la anterior sin quedar como definitiva.
     merged.ambiguousTime = incoming.ambiguousTime;
@@ -87,6 +88,9 @@ export function mergeReservationData(
     delete merged.startsAt;
     delete merged.endsAt;
     delete merged.occupiedEndsAt;
+  }
+  if (incoming.requestedTimeOfDay && !incoming.requestedTime) {
+    merged.requestedTimeOfDay = incoming.requestedTimeOfDay;
   }
 
   if (requestedDateChanged || requestedTimeChanged) {

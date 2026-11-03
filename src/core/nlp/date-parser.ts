@@ -19,6 +19,28 @@ const SPANISH_WEEKDAYS: ReadonlyArray<{ name: string; weekday: Weekday }> = [
 ];
 
 const WEEKDAY_NAMES = SPANISH_WEEKDAYS.map(({ name }) => name).join('|');
+const SPANISH_MONTHS = [
+  'enero',
+  'febrero',
+  'marzo',
+  'abril',
+  'mayo',
+  'junio',
+  'julio',
+  'agosto',
+  'septiembre',
+  'octubre',
+  'noviembre',
+  'diciembre',
+] as const;
+const MONTH_NAMES = SPANISH_MONTHS.join('|');
+
+const NUMERIC_CALENDAR_DATE_PATTERN =
+  /(?:^|[^\p{Letter}\p{Number}])(\d{1,2})\s*[/-]\s*(\d{1,2})(?:\s*[/-]\s*(\d{4}))?(?![\p{Letter}\p{Number}])/u;
+const TEXT_CALENDAR_DATE_PATTERN = new RegExp(
+  `\\b(\\d{1,2})\\s+(?:de\\s+)?(${MONTH_NAMES})(?:\\s+de\\s+(\\d{4}))?\\b`,
+  'u',
+);
 
 // "en/por/de la mañana" es una franja horaria, no una fecha. Se quitan estas
 // frases antes de buscar la fecha para que no conviertan "por la mañana" en
@@ -69,6 +91,15 @@ export interface DateParserOptions {
 export type DatePhraseMatch =
   | {
       kind: 'single';
+      type: 'calendar-date';
+      phrase: string;
+      day: number;
+      month: number;
+      year?: number;
+      isNextWeek: false;
+    }
+  | {
+      kind: 'single';
       type: 'today' | 'tomorrow' | 'day-after-tomorrow' | 'weekday';
       phrase: string;
       weekday?: Weekday;
@@ -88,6 +119,50 @@ const findWeekday = (phrase: string): Weekday | undefined =>
 const isNextWeekPhrase = (phrase: string): boolean =>
   /\b(?:proximo|proxima)\b/u.test(phrase);
 
+const createCalendarDate = (
+  year: number,
+  month: number,
+  day: number,
+): Date | undefined => {
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+    ? date
+    : undefined;
+};
+
+const makeCalendarDateMatch = (
+  phrase: string,
+  day: number,
+  month: number,
+  yearText?: string,
+): DatePhraseMatch | undefined => {
+  const year = yearText ? Number(yearText) : undefined;
+  const maximumDay = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][
+    month - 1
+  ];
+
+  if (
+    !maximumDay ||
+    day < 1 ||
+    day > maximumDay ||
+    (year !== undefined && !createCalendarDate(year, month, day))
+  ) {
+    return undefined;
+  }
+
+  return {
+    kind: 'single',
+    type: 'calendar-date',
+    phrase,
+    day,
+    month,
+    ...(year === undefined ? {} : { year }),
+    isNextWeek: false,
+  };
+};
+
 /**
  * Localiza la frase de fecha de un mensaje y la clasifica.
  *
@@ -95,11 +170,39 @@ const isNextWeekPhrase = (phrase: string): boolean =>
  * "recurrente" (los martes, cada martes). Las frases recurrentes nunca se
  * convierten en una fecha concreta.
  */
-export function matchDatePhrase(text: string): DatePhraseMatch | undefined {
-  const normalized = normalizeText(text).replace(/ñ/gu, 'n');
+export function matchDatePhrase(
+  text: string,
+  normalizedText?: string,
+): DatePhraseMatch | undefined {
+  const numericDate = NUMERIC_CALENDAR_DATE_PATTERN.exec(text);
+  if (numericDate) {
+    const match = makeCalendarDateMatch(
+      numericDate[0].trim(),
+      Number(numericDate[1]),
+      Number(numericDate[2]),
+      numericDate[3],
+    );
+    if (match) return match;
+  }
+
+  const normalized = normalizeText(normalizedText ?? text).replace(/ñ/gu, 'n');
   const candidate = stripMorningFranja(normalized)
     .replace(DATE_CHANGE_SOURCE_PATTERN, ' ')
     .trim();
+
+  const textDate = TEXT_CALENDAR_DATE_PATTERN.exec(candidate);
+  if (textDate) {
+    const month = SPANISH_MONTHS.indexOf(
+      textDate[2] as (typeof SPANISH_MONTHS)[number],
+    );
+    const match = makeCalendarDateMatch(
+      textDate[0],
+      Number(textDate[1]),
+      month + 1,
+      textDate[3],
+    );
+    if (match) return match;
+  }
 
   const recurring = RECURRING_DATE_PATTERN.exec(candidate);
   const keyword = KEYWORD_DATE_PATTERN.exec(candidate);
@@ -183,6 +286,20 @@ export function resolveDatePhrase(
   const timeZone = options.timeZone ?? DEFAULT_TIME_ZONE;
   const now = options.now ?? new Date();
   const today = getBusinessDateOnly(now, timeZone);
+
+  if (match.type === 'calendar-date') {
+    const currentYear = today.getUTCFullYear();
+    if (match.year !== undefined) {
+      return createCalendarDate(match.year, match.month, match.day);
+    }
+
+    for (let year = currentYear; year <= currentYear + 8; year += 1) {
+      const date = createCalendarDate(year, match.month, match.day);
+      if (date && date.getTime() >= today.getTime()) return date;
+    }
+
+    return undefined;
+  }
 
   if (match.type === 'today') return today;
   if (match.type === 'tomorrow') return addDays(today, 1);

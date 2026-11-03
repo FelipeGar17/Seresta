@@ -7,6 +7,7 @@ import {
   validateAppointmentAvailability,
   type AppointmentAvailabilityReason,
 } from '../booking/appointment-availability.js';
+import type { ExistingAppointment } from '../booking/appointment-schedule.js';
 import type { BusinessHoursSlot } from '../booking/business-hours-validator.js';
 import {
   validateService,
@@ -28,13 +29,14 @@ export type ReservationScheduleReason =
   | 'invalid-time';
 
 export type ReservationScheduleResult =
-  | { status: 'incomplete' }
+  | { status: 'incomplete'; availableStarts?: Date[] }
   | {
       status: 'invalid';
       field: ReservationScheduleField;
       reason: ReservationScheduleReason;
       service?: Service;
       requestedStartsAt?: Date;
+      alternatives?: Date[];
     }
   | {
       status: 'valid';
@@ -68,6 +70,7 @@ export function validateReservationSchedule(
   business: ConfiguracionNegocio,
   data: ReservationData,
   now: Date,
+  existingAppointments?: readonly ExistingAppointment[],
 ): ReservationScheduleResult {
   if (!data.serviceId) return { status: 'incomplete' };
 
@@ -118,6 +121,7 @@ export function validateReservationSchedule(
     startsAt,
     durationMinutes: serviceResult.value.durationMinutes,
     now,
+    ...(existingAppointments === undefined ? {} : { existingAppointments }),
   });
   if (!availability.valid) {
     return {
@@ -126,6 +130,9 @@ export function validateReservationSchedule(
       reason: availability.reason,
       service: serviceResult.value,
       requestedStartsAt: startsAt,
+      ...(availability.alternatives
+        ? { alternatives: availability.alternatives }
+        : {}),
     };
   }
 

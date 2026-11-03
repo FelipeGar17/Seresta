@@ -42,6 +42,16 @@ const getOccupiedInterval = (
   appointment: ExistingAppointment,
   intervalMinutes: number,
 ) => {
+  if (
+    appointment.endsAt &&
+    appointment.endsAt.getTime() > appointment.startsAt.getTime()
+  ) {
+    return {
+      startsAt: appointment.startsAt,
+      endsAt: appointment.endsAt,
+    };
+  }
+
   const occupancy = getAppointmentOccupancy(
     appointment.startsAt,
     appointment.durationMinutes,
@@ -117,11 +127,72 @@ const getAlternatives = (
     if (overlaps !== false) continue;
 
     alternatives.push(startsAt);
-    if (alternatives.length >= maxAlternatives) break;
   }
 
-  return alternatives;
+  return alternatives
+    .sort((left, right) => {
+      const distance =
+        Math.abs(left.getTime() - requestedTime) -
+        Math.abs(right.getTime() - requestedTime);
+      if (distance !== 0) return distance;
+
+      const leftIsEarlier = left.getTime() < requestedTime;
+      const rightIsEarlier = right.getTime() < requestedTime;
+      if (leftIsEarlier !== rightIsEarlier) {
+        return leftIsEarlier ? -1 : 1;
+      }
+      return left.getTime() - right.getTime();
+    })
+    .slice(0, maxAlternatives);
 };
+
+export interface AvailableAppointmentStartTimesInput {
+  dateOnly: Date;
+  durationMinutes: number;
+  now?: Date;
+  existingAppointments: readonly ExistingAppointment[];
+}
+
+export function getAvailableAppointmentStartTimes(
+  business: ConfiguracionNegocio,
+  input: AvailableAppointmentStartTimesInput,
+): Date[] {
+  if (Number.isNaN(input.dateOnly.getTime())) {
+    throw new Error('La fecha para consultar disponibilidad no es válida.');
+  }
+  if (!Number.isFinite(input.durationMinutes) || input.durationMinutes <= 0) {
+    throw new Error('La duración del servicio no es válida.');
+  }
+
+  const intervalMinutes = getAppointmentIntervalMinutes(business);
+  if (intervalMinutes === undefined) {
+    throw new Error('El intervalo de agenda del negocio no es válido.');
+  }
+
+  return getScheduleStartTimes(
+    business,
+    input.dateOnly,
+    input.durationMinutes,
+    intervalMinutes,
+  ).filter((startsAt) => {
+    const result = validateAppointmentAvailability(business, {
+      startsAt,
+      durationMinutes: input.durationMinutes,
+      now: input.now,
+      existingAppointments: input.existingAppointments,
+    });
+    if (
+      !result.valid &&
+      (result.reason === 'invalid-configuration' ||
+        result.reason === 'invalid-existing-appointment')
+    ) {
+      throw new Error(
+        'No se pudo validar la configuración o las citas existentes de la agenda.',
+      );
+    }
+    return result.valid;
+  });
+}
 
 /**
  * Valida el inicio de una cita contra horario, intervalo, bloques y las citas

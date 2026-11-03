@@ -46,6 +46,67 @@ const setup = (durationMinutes = 45) => {
 };
 
 describe('coordinador — orientación inicial', () => {
+  it.each([
+    ['1', 'book-appointment'],
+    ['opción 2', 'check-prices'],
+    ['3', 'cancel-appointment'],
+  ] as const)(
+    'interpreta la opción %s solo después de mostrar el menú',
+    async (choice, intent) => {
+      const { say } = setup();
+      await say('hola');
+
+      const result = await say(choice);
+
+      expect(result.conversation.intent).toBe(intent);
+      if (intent === 'book-appointment') {
+        expect(result.conversation.state).toBe('collecting-service');
+        expect(result.nextField).toBe('serviceId');
+        expect(result.reply).toMatch(/¿qué servicio deseas agendar/i);
+        expect(result.reply).not.toMatch(/no logré reconocer ese dato/i);
+      } else if (intent === 'check-prices') {
+        expect(result.reply).toContain('Corte de cabello');
+        expect(result.reply).toContain('Responde 1, 2 o 3.');
+      } else {
+        expect(result.reply).toMatch(/no encuentro citas confirmadas/i);
+      }
+    },
+  );
+
+  it('no interpreta un número como opción si todavía no mostró el menú', async () => {
+    const { say } = setup();
+    const result = await say('1');
+
+    expect(result.conversation.intent).toBe('unknown');
+    expect(result.conversation.state).toBe('idle');
+    expect(result.reply).toContain('Responde 1, 2 o 3.');
+  });
+
+  it('permite iniciar una reserva con el menú que sigue al catálogo', async () => {
+    const { say } = setup();
+    await say('¿qué servicios tienen?');
+
+    const result = await say('1');
+
+    expect(result.conversation.intent).toBe('book-appointment');
+    expect(result.conversation.state).toBe('collecting-service');
+    expect(result.nextField).toBe('serviceId');
+    expect(result.reply).toMatch(/¿qué servicio deseas agendar/i);
+    expect(result.reply).not.toMatch(/no logré reconocer ese dato/i);
+  });
+
+  it('no interpreta opciones del menú durante una reserva activa', async () => {
+    const { say } = setup();
+    await say('quiero agendar una cita');
+
+    const result = await say('1');
+
+    expect(result.conversation.state).toBe('collecting-service');
+    expect(result.conversation.data.serviceId).toBeUndefined();
+    expect(result.nextField).toBe('serviceId');
+    expect(result.reply).toMatch(/no logré reconocer ese dato/i);
+  });
+
   it('un saludo ofrece opciones sin dar a entender que la reserva ya empezó', async () => {
     const { say } = setup();
     const result = await say('hola');
@@ -57,6 +118,17 @@ describe('coordinador — orientación inicial', () => {
     expect(result.reply).toMatch(/consultar servicios y precios/i);
     expect(result.reply).toMatch(/cancelar una cita confirmada/i);
     expect(result.reply).not.toMatch(/¿qué servicio deseas/i);
+  });
+
+  it('un saludo combinado con consulta de servicios responde directamente al catálogo', async () => {
+    const { say } = setup();
+    const result = await say('Hola, ¿qué servicios tienen?');
+
+    expect(result.reply).toContain('Corte de cabello');
+    expect(result.reply).toContain('Responde 1, 2 o 3.');
+    expect(result.reply).not.toMatch(/¡Hola! 👋 Bienvenido/i);
+    expect(result.conversation.intent).toBe('list-services');
+    expect(result.conversation.state).toBe('idle');
   });
 
   it.each(['blorf', '.'])(
@@ -86,6 +158,18 @@ describe('coordinador — orientación inicial', () => {
     expect(result.reply).toMatch(/agendar una cita/i);
     expect(result.reply).toMatch(/consultar servicios y precios/i);
     expect(result.reply).toMatch(/cancelar una cita confirmada/i);
+  });
+
+  it('un "sí" aislado en estado idle no se interpreta como confirmación previa', async () => {
+    const { say } = setup();
+    await say('hola');
+
+    const result = await say('sí');
+
+    expect(result.conversation.state).toBe('idle');
+    expect(result.conversation.intent).toBe('unknown');
+    expect(result.reply).toMatch(/no alcancé a identificar/i);
+    expect(result.reply).toMatch(/agendar una cita/i);
   });
 
   it('si no reconoce un dato durante la reserva, conserva el estado y da un ejemplo', async () => {

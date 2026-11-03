@@ -6,15 +6,16 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
+    "start": "npm run build && node dist/src/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "intent:console": "tsx src/core/nlp/intent-console.ts",
     "coordinator:console": "tsx src/console/coordinator-console.ts",
     "whatsapp:test": "tsx tests/whatsapp-web/connection-test.ts",
     "whatsapp:message-test": "tsx tests/whatsapp-web/message-test.ts",
-    "test:gcal-auth": "tsx src/experiments/google-calendar-auth.ts",
-    "test:gcal": "tsx src/experiments/google-calendar-test.ts",
-    "test:wa-gcal": "tsx src/experiments/whatsapp-calendar-test.ts"
+    "calendar:auth": "tsx src/connectors/google-calendar/auth-cli.ts",
+    "test:gcal-auth": "npm run calendar:auth",
+    "test:gcal": "vitest run tests/connectors/google-calendar"
   },
   "keywords": [],
   "author": "",

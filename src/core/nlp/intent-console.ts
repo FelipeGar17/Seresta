@@ -142,9 +142,18 @@ consoleInterface.on('line', (line) => {
 
   console.log(`Intención: ${analysis.detection.intent}`);
   console.log(
+    `Decisión: ${analysis.detection.decision.action}${
+      analysis.detection.decision.candidates.length > 0
+        ? ` (${analysis.detection.decision.candidates.join(' / ')})`
+        : ''
+    }`,
+  );
+  console.log(
     `Intenciones: ${analysis.detection.intents.join(', ') || 'ninguna'}`,
   );
-  console.log(`Puntaje de regla: ${analysis.detection.score}`);
+  console.log(
+    `Coincidencias de regla (no es probabilidad): ${analysis.detection.score}`,
+  );
   console.log(
     `Coincidencias: ${analysis.detection.matched.join(', ') || 'ninguna'}`,
   );

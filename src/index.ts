@@ -1,43 +1,38 @@
-import qrcode from 'qrcode-terminal';
-import whatsapp from 'whatsapp-web.js';
 import { loadBusinessConfig } from './config/load-config.js';
+import { GoogleCalendarConnector } from './connectors/google-calendar/google-calendar-connector.js';
+import type { WhatsAppConnector } from './connectors/whatsapp/whatsapp-connector.js';
+import { WhatsAppWebConnector } from './connectors/whatsapp/whatsapp-web-connector.js';
 import { ConversationCoordinator } from './core/conversation/coordinator.js';
-import { isMessageReceivedAfterReady } from './core/messaging/incoming-message-policy.js';
+import { IncomingMessageProcessor } from './core/messaging/incoming-message-processor.js';
 import { purgeCancelledReservations } from './core/reservations/reservation-retention.js';
 import {
   DEFAULT_SQLITE_PATH,
   openSqliteStorage,
 } from './core/storage/sqlite-storage.js';
 
-const { Client, LocalAuth } = whatsapp;
-
 const main = async (): Promise<void> => {
-  const businessConfigPath = process.env.BUSINESS_CONFIG_PATH;
-  if (!businessConfigPath) {
-    throw new Error(
-      'Falta BUSINESS_CONFIG_PATH con la ruta al JSON del negocio.',
-    );
-  }
-
+  const businessConfigPath =
+    process.env.BUSINESS_CONFIG_PATH ?? 'negocio.json';
   const business = loadBusinessConfig(businessConfigPath);
+  console.log(`Configuración del negocio validada: ${businessConfigPath}.`);
+
+  const calendar = await GoogleCalendarConnector.create();
+  const calendarCheckFrom = new Date();
+  await calendar.listBusyAppointments(
+    business,
+    calendarCheckFrom,
+    new Date(calendarCheckFrom.getTime() + 60_000),
+  );
+  console.log(`Google Calendar conectado: ${business.googleCalendarId}.`);
+
   const storage = openSqliteStorage(
     process.env.SQLITE_DATABASE_PATH ?? DEFAULT_SQLITE_PATH,
   );
-  const coordinator = new ConversationCoordinator(storage.conversations, {
-    reservations: storage.reservations,
-  });
-  const client = new Client({
-    authStrategy: new LocalAuth({
-      clientId: 'sistema-citas',
-      dataPath: '.wwebjs_auth',
-    }),
-    puppeteer: { headless: false },
-  });
+  let whatsapp: WhatsAppConnector | undefined;
+  let processor: IncomingMessageProcessor | undefined;
   let shuttingDown = false;
-  let whatsappReadyAt: Date | undefined;
 
   try {
-    await storage.conversations.deleteExpired();
     const purgedReservations = await purgeCancelledReservations(
       storage.reservations,
       new Date(),
@@ -46,93 +41,30 @@ const main = async (): Promise<void> => {
       console.log(`Citas canceladas antiguas depuradas: ${purgedReservations}.`);
     }
 
-    client.on('qr', (qr: string) => {
-      console.log('Escanea este código QR con WhatsApp:');
-      qrcode.generate(qr, { small: true });
+    const coordinator = new ConversationCoordinator(storage.conversations, {
+      reservations: storage.reservations,
+      calendar,
     });
-
-    client.on('authenticated', () => {
-      console.log('Sesión de WhatsApp autenticada.');
-    });
-
-    client.on('ready', () => {
-      whatsappReadyAt = new Date();
-      console.log(
-        `WhatsApp listo para ${client.info.pushname ?? 'la cuenta autenticada'}.`,
-      );
-    });
-
-    client.on('message', async (message) => {
-      if (
-        message.fromMe ||
-        !message.body.trim() ||
-        message.from.endsWith('@g.us') ||
-        message.from.endsWith('@newsletter') ||
-        message.from.endsWith('@broadcast')
-      ) {
-        return;
-      }
-      if (
-        !whatsappReadyAt ||
-        !isMessageReceivedAfterReady(message.timestamp, whatsappReadyAt)
-      ) {
-        console.info(
-          `Mensaje anterior a la conexión lista ignorado: ${message.from}. Envía un mensaje nuevo después de que WhatsApp esté listo.`,
-        );
-        return;
-      }
-
-      try {
-        let whatsappId = message.from;
-        let customerPhone: string | undefined;
-        try {
-          const contact = await message.getContact();
-          whatsappId = contact.id._serialized;
-          const reportedPhone = contact.number.trim();
-          if (reportedPhone) customerPhone = reportedPhone;
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : String(error);
-          console.error(
-            `No se pudieron leer los datos del contacto ${message.from}; continuaré usando su id de chat: ${detail}`,
-          );
-        }
-
-        const result = await coordinator.handleMessage({
-          business,
-          contactId: message.from,
-          whatsappId,
-          ...(customerPhone ? { customerPhone } : {}),
-          message: message.body,
-        });
-
-        await message.reply(result.reply);
-        console.log(
-          `Mensaje atendido para ${message.from}; estado ${result.conversation.state}.`,
-        );
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        console.error(
-          `No se pudo procesar o responder al mensaje ${message.id._serialized}: ${detail}`,
-        );
-      }
-    });
-
-    client.on('auth_failure', (message: string) => {
-      console.error(`Falló la autenticación de WhatsApp: ${message}`);
-    });
-
-    client.on('disconnected', (reason: string) => {
-      console.error(`WhatsApp se desconectó: ${reason}`);
-    });
+    const messageProcessor = new IncomingMessageProcessor(
+      storage.incomingMessages,
+      coordinator,
+      (whatsapp = new WhatsAppWebConnector()),
+      business,
+    );
+    processor = messageProcessor;
 
     const shutdown = async (signal: string): Promise<void> => {
       if (shuttingDown) return;
       shuttingDown = true;
       console.log(`${signal}: cerrando WhatsApp y SQLite...`);
       try {
-        await client.destroy();
+        await whatsapp?.close();
       } finally {
-        storage.close();
+        try {
+          await processor?.waitForCurrentWork();
+        } finally {
+          storage.close();
+        }
       }
     };
 
@@ -149,16 +81,27 @@ const main = async (): Promise<void> => {
       });
     });
 
-    await client.initialize();
+    await whatsapp.start(
+      (message) => messageProcessor.accept(message),
+      async () => {
+        await messageProcessor.recover();
+        await storage.conversations.deleteExpired();
+      },
+    );
+    console.log('Sistema iniciado. Esperando mensajes de WhatsApp.');
   } catch (error) {
     try {
-      await client.destroy();
-    } catch (destroyError) {
+      await whatsapp?.close();
+    } catch (closeError) {
       const detail =
-        destroyError instanceof Error ? destroyError.message : String(destroyError);
+        closeError instanceof Error ? closeError.message : String(closeError);
       console.error(`No se pudo cerrar el cliente de WhatsApp: ${detail}`);
     } finally {
-      storage.close();
+      try {
+        await processor?.waitForCurrentWork();
+      } finally {
+        storage.close();
+      }
     }
     throw error;
   }

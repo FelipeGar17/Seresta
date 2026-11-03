@@ -84,7 +84,10 @@ describe('ciclo de vida — confirmación de una cita', () => {
     expect(secondConfirmation.reply).toMatch(/solo puedes cancelarla/i);
     await expect(
       reservations.getById('reservation:conversation-1'),
-    ).resolves.toMatchObject({ status: 'confirmed' });
+    ).resolves.toMatchObject({
+      status: 'confirmed',
+      customerPhone: '+573001112233',
+    });
 
     current = new Date(current.getTime() + 59_999);
     const acknowledgment = await say('allá estaré');

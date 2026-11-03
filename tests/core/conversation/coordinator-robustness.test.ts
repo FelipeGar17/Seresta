@@ -92,6 +92,23 @@ describe('coordinador — negación de cancelación', () => {
     await toConfirmation(say);
     expect((await say('cancelar')).conversation.state).toBe('cancelled');
   });
+
+  it('pide aclaración ante acciones incompatibles y no inicia ninguna', async () => {
+    const say = setup();
+
+    const result = await say(
+      'Quiero agendar una cita y cancelar mi cita mañana a las 3 pm',
+    );
+
+    expect(result.conversation.state).toBe('idle');
+    expect(result.conversation.data).toEqual({});
+    expect(result.conversation.intent).toBe('unknown');
+    expect(result.reply).toMatch(/^¡Hola! 👋 Bienvenido a Barbería\./u);
+    expect(result.reply).toMatch(/acciones distintas/i);
+    expect(result.reply).toMatch(/agendar una cita/i);
+    expect(result.reply).toMatch(/cancelar una cita/i);
+    expect(result.reply).toMatch(/no he confirmado ni cancelado nada/i);
+  });
 });
 
 describe('coordinador — respuesta negativa a la confirmación', () => {
@@ -155,6 +172,59 @@ describe('coordinador — respuesta negativa a la confirmación', () => {
     expect(result.conversation.data).toEqual({});
     expect(result.reply).toMatch(/no se creó ninguna cita/i);
   });
+
+  it.each([
+    'no la confirmo, mejor cambia la hora a las 4 pm',
+    'mejor cambia la hora a las 4 pm, no la confirmo',
+  ])(
+    'si mezcla rechazo y cambio, prioriza el dato y conserva el borrador: "%s"',
+    async (message) => {
+      const say = setup();
+      await toConfirmation(say);
+
+      const result = await say(message);
+
+      expect(result.conversation.state).toBe('awaiting-confirmation');
+      expect(result.nextField).toBeNull();
+      expect(result.conversation.data).toMatchObject({
+        serviceId: 'cut-1',
+        customerName: 'Carlos',
+        requestedTime: '16:00',
+        startsAt: new Date('2026-10-16T21:00:00.000Z'),
+        endsAt: new Date('2026-10-16T21:30:00.000Z'),
+        occupiedEndsAt: new Date('2026-10-16T21:30:00.000Z'),
+      });
+      expect(result.reply).toContain('*Resumen de tu cita*');
+      expect(result.reply).toContain('Hora: 4:00 p.');
+    },
+  );
+});
+
+describe('coordinador — confirmación mezclada con cambios', () => {
+  it.each([
+    'sí, la confirmo, pero cambia la hora a las 4 pm',
+    'cambia la hora a las 4 pm y sí, la confirmo',
+  ])(
+    'prioriza el cambio y no avanza la confirmación final cuando hay datos nuevos: "%s"',
+    async (message) => {
+      const say = setup();
+      await toConfirmation(say);
+
+      const result = await say(message);
+
+      expect(result.conversation.state).toBe('awaiting-confirmation');
+      expect(result.nextField).toBeNull();
+      expect(result.conversation.data).toMatchObject({
+        serviceId: 'cut-1',
+        customerName: 'Carlos',
+        requestedTime: '16:00',
+        startsAt: new Date('2026-10-16T21:00:00.000Z'),
+        endsAt: new Date('2026-10-16T21:30:00.000Z'),
+        occupiedEndsAt: new Date('2026-10-16T21:30:00.000Z'),
+      });
+      expect(result.reply).toContain('*Resumen de tu cita*');
+    },
+  );
 });
 
 describe('coordinador — cambio de nombre en la confirmación', () => {

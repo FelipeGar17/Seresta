@@ -20,6 +20,7 @@ export type ConversationIntent =
 // Estados que indican en qué paso del flujo se encuentra la conversación.
 export type ConversationState =
   | "idle"
+  | "checking-availability"
   | "collecting-service"
   | "collecting-date"
   | "collecting-time"
@@ -58,6 +59,7 @@ export interface ReservationData {
   serviceId?: Identifier;
   requestedDate?: Date;
   requestedTime?: string;
+  requestedTimeOfDay?: "morning" | "afternoon" | "evening";
   // Hora de 12 h que el cliente dio sin indicar mañana o tarde. No es una
   // hora definitiva: el flujo pregunta el periodo y luego la reemplaza por
   // `requestedTime`.
@@ -153,6 +155,7 @@ export interface ExtractedEntities {
 // Mensaje intercambiado dentro de una conversación.
 export interface ConversationMessage {
   id: Identifier;
+  externalMessageId?: Identifier;
   direction: "incoming" | "outgoing";
   text: string;
   createdAt: Date;

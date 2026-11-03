@@ -50,25 +50,25 @@ describe('buildCatalogReply', () => {
   ])('lista los servicios activos con su precio real: %j', (message) => {
     const text = reply(full, message, 'list-services');
 
-    expect(text).toContain('Corte de cabello: $25.000 COP (30 minutos)');
-    expect(text).toContain('Barba: $15.000 COP (30 minutos)');
-    expect(text).toContain('Corte y barba: $38.000 COP (45 minutos)');
+    expect(text).toContain('Corte de cabello: $25.000 COP · 30 minutos');
+    expect(text).toContain('Barba: $15.000 COP · 30 minutos');
+    expect(text).toContain('Corte y barba: $38.000 COP · 45 minutos');
     expect(text).not.toContain('Tinte');
     expect(text).not.toContain('99.000');
   });
 
   it.each([
-    ['¿Cuánto cuesta el corte de cabello?', 'Corte de cabello cuesta $25.000 COP y dura 30 minutos.'],
-    ['¿Cuánto vale la barba?', 'Barba cuesta $15.000 COP y dura 30 minutos.'],
-    ['¿Cuánto cuesta el corte y barba?', 'Corte y barba cuesta $38.000 COP y dura 45 minutos.'],
-    ['cuánto me cobran por la barba', 'Barba cuesta $15.000 COP y dura 30 minutos.'],
+    ['¿Cuánto cuesta el corte de cabello?', '💰 Corte de cabello: $25.000 COP · 30 minutos.'],
+    ['¿Cuánto vale la barba?', '💰 Barba: $15.000 COP · 30 minutos.'],
+    ['¿Cuánto cuesta el corte y barba?', '💰 Corte y barba: $38.000 COP · 45 minutos.'],
+    ['cuánto me cobran por la barba', '💰 Barba: $15.000 COP · 30 minutos.'],
   ])('informa el precio exacto de %j', (message, expected) => {
     expect(reply(full, message, 'check-prices')).toBe(expected);
   });
 
   it('confirma que existe el servicio por el que se pregunta', () => {
     expect(reply(full, '¿Tienen corte de cabello?', 'list-services')).toBe(
-      'Sí, ofrecemos Corte de cabello.\n• Corte de cabello: $25.000 COP (30 minutos)',
+      '✅ Sí, ofrecemos Corte de cabello:\n• Corte de cabello: $25.000 COP · 30 minutos',
     );
   });
 
@@ -91,7 +91,7 @@ describe('buildCatalogReply', () => {
   it('lista todos los precios si no se nombra un servicio', () => {
     const text = reply(full, '¿Qué precios manejan?', 'check-prices');
 
-    expect(text.startsWith('Estos son nuestros servicios y precios:')).toBe(true);
+    expect(text.startsWith('💰 Servicios y precios:')).toBe(true);
     expect(text).toContain('Barba: $15.000 COP');
   });
 
@@ -109,7 +109,7 @@ describe('buildCatalogReply', () => {
     ]);
 
     expect(reply(empty, '¿Qué servicios ofrecen?', 'list-services')).toBe(
-      'Por ahora no tengo servicios configurados para mostrarte.',
+      'ℹ️ Por ahora no hay servicios configurados para mostrarte.',
     );
   });
 });

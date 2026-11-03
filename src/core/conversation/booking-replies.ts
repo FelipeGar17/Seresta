@@ -11,6 +11,7 @@ import {
 } from '../booking/appointment-schedule.js';
 import {
   getBusinessDateOnly,
+  getLocalTimeMinutes,
   getWeekdayOfDateOnly,
 } from '../time/business-time.js';
 import { MAX_BOOKING_DAYS_AHEAD } from '../booking/booking-date-policy.js';
@@ -58,6 +59,13 @@ const getNextStepForSchedule = (
   issue: InvalidReservationSchedule,
   business: ConfiguracionNegocio,
 ): string | undefined => {
+  if (issue.alternatives?.length) {
+    const options = issue.alternatives
+      .map((start) => formatBusinessTime(start, business.timezone))
+      .join(', ');
+    return `Los horarios libres más cercanos son: ${options}; elige uno y volveré a comprobarlo.`;
+  }
+
   if (issue.reason === 'outside-hours') {
     const hours = formatBusinessHours(business, issue.requestedStartsAt);
     return hours
@@ -89,26 +97,24 @@ export const formatConfirmedReservationReply = (
   timeZone: string,
 ): string =>
   [
-    `¡Gracias por confirmar, ${summary.customerName}! Tu cita quedó confirmada:`,
+    `✅ ¡Gracias por confirmar, ${summary.customerName}! Tu cita quedó confirmada:`,
     '',
     ...formatReservationDetails(summary, timeZone),
     '',
-    'Una vez confirmada, no se puede modificar; solo puedes cancelarla.',
-    'Si necesitas cancelarla, escribe «cancelar mi cita».',
-    '',
-    'Para cerrar la conversación, puedes responder «gracias», «allá estaré» o «listo».',
+    '⚠️ Una vez confirmada, no se puede modificar; solo puedes cancelarla.',
+    'Para cancelar: escribe *cancelar mi cita*.',
   ].join('\n');
 
 const formatReservationDetails = (
   summary: ReservationSummary,
   timeZone: string,
 ): string[] => [
-  `• Servicio: ${summary.service.name}`,
-  `• Fecha: ${formatBusinessDate(summary.startsAt, timeZone)}`,
-  `• Hora: ${formatBusinessTime(summary.startsAt, timeZone)}`,
-  `• Nombre: ${summary.customerName}`,
-  `• Duración: ${formatDuration(summary.service.durationMinutes)}`,
-  `• Precio: ${formatPrice(summary.service.price)}`,
+  `• ✂️ Servicio: ${summary.service.name}`,
+  `• 📅 Fecha: ${formatBusinessDate(summary.startsAt, timeZone)}`,
+  `• 🕒 Hora: ${formatBusinessTime(summary.startsAt, timeZone)}`,
+  `• 👤 Nombre: ${summary.customerName}`,
+  `• ⏱️ Duración: ${formatDuration(summary.service.durationMinutes)}`,
+  `• 💰 Precio: ${formatPrice(summary.service.price)}`,
 ];
 
 export const formatFinalConfirmationPrompt = (
@@ -116,22 +122,17 @@ export const formatFinalConfirmationPrompt = (
   timeZone: string,
 ): string =>
   [
-    '*Verifica por última vez los datos de tu cita*',
+    '📝 *Verifica por última vez los datos de tu cita*',
     '',
     ...formatReservationDetails(summary, timeZone),
     '',
-    'Antes de confirmarla: una vez creada no se podrá modificar; solo podrás cancelarla.',
+    '⚠️ Una vez confirmada, no se podrá modificar; solo podrás cancelarla.',
     '',
-    '¿Confirmas que agendemos esta cita?',
-    'Responde *Sí, confirmar*, *Cambiar algún dato* o *Cancelar*.',
+    '¿La confirmamos? Responde *Sí, confirmar*, *Cambiar algún dato* o *Cancelar*.',
   ].join('\n');
 
-export const CONFIRMATION_OPTIONS = [
-  'Responde:',
-  '• *Sí, confirmar*',
-  '• *Cambiar algún dato*',
-  '• *Cancelar*',
-].join('\n');
+export const CONFIRMATION_OPTIONS =
+  'Responde *Sí, confirmar*, *Cambiar algún dato* o *Cancelar*.';
 
 export const getFieldPrompt = (
   field: ReservationProgressField,
@@ -143,32 +144,64 @@ export const getFieldPrompt = (
         .filter((service) => service.active)
         .map((service) => `• ${service.name}`) ?? [];
     return [
-      '¿Qué servicio deseas agendar?',
+      '✂️ ¿Qué servicio deseas agendar?',
       ...(services.length > 0
-        ? ['', 'Puedes elegir uno de estos servicios:', ...services]
+        ? ['', 'Disponibles:', ...services]
         : []),
       '',
-      'Escribe el nombre del servicio. Si quieres ver opciones o precios, pregunta «¿qué servicios tienen?» o «¿cuánto cuesta?».',
+      'ℹ️ Para revisar la disponibilidad, necesito saber el servicio; cada uno tiene una duración distinta.',
+      '',
+      'Escribe el nombre del servicio o pregunta «¿qué servicios tienen?» para ver precios.',
     ].join('\n');
   }
   if (field === 'requestedDate') {
-    return '¿Para qué fecha deseas la cita? Por ejemplo: mañana o el viernes.';
+    return '📅 ¿Para qué fecha deseas la cita? Ej.: mañana o viernes.';
   }
   if (field === 'requestedTime') {
-    return '¿A qué hora deseas la cita? Puedes decir, por ejemplo, 3 pm o 15:00.';
+    return '🕒 ¿A qué hora deseas la cita? Ej.: 3 pm o 15:00.';
   }
-  return '¿A nombre de quién agendamos la cita? Puedes responder solo con tu nombre.';
+  return '👤 ¿A nombre de quién agendamos la cita? Puedes responder solo con tu nombre.';
 };
 
 export const getUnrecognizedFieldReply = (
   field: ReservationProgressField,
   data: ReservationData,
   business: ConfiguracionNegocio,
-): string =>
-  [
-    'No logré reconocer ese dato en tu mensaje.',
+): string => {
+  const explain =
+    field === 'serviceId'
+      ? 'Me falta identificar el servicio exacto.'
+      : field === 'requestedDate'
+        ? 'Me falta una fecha válida para la cita.'
+        : field === 'requestedTime'
+          ? data.ambiguousTime
+            ? 'Entendí la hora, pero falta aclarar si es mañana o tarde.'
+            : 'Me falta una hora válida para la cita.'
+          : 'Me falta el nombre para registrar la cita.';
+
+  const serviceName = data.serviceId
+    ? business.services.find((service) => service.id === data.serviceId)?.name
+    : undefined;
+  const knownData = [
+    data.serviceId
+      ? `✂️ Servicio: ya registrado${serviceName ? ` (${serviceName})` : ''}`
+      : undefined,
+    data.requestedDate
+      ? `📅 Fecha: ${formatBusinessDate(data.requestedDate, business.timezone)}`
+      : undefined,
+    data.requestedTime ? `🕒 Hora: ${data.requestedTime}` : undefined,
+    data.customerName ? `👤 Nombre: ${data.customerName}` : undefined,
+  ].filter((value): value is string => value !== undefined);
+
+  return [
+    '😅 No logré reconocer ese dato.',
+    explain,
+    ...(knownData.length > 0
+      ? [`✅ Conservo estos datos válidos: ${knownData.join(' · ')}`]
+      : []),
     getPromptForData(field, data, business),
   ].join('\n');
+};
 
 const getTimeClarificationPrompt = (
   ambiguousTime: NonNullable<ReservationData['ambiguousTime']>,
@@ -189,6 +222,111 @@ export const getPromptForData = (
   field === 'requestedTime' && data.ambiguousTime
     ? getTimeClarificationPrompt(data.ambiguousTime)
     : getFieldPrompt(field, business);
+
+type TimePeriod = NonNullable<ReservationData['requestedTimeOfDay']>;
+
+const TIME_PERIODS: readonly TimePeriod[] = [
+  'morning',
+  'afternoon',
+  'evening',
+];
+
+const TIME_PERIOD_LABELS: Record<TimePeriod, string> = {
+  morning: 'la mañana',
+  afternoon: 'la tarde',
+  evening: 'la noche',
+};
+
+const getTimePeriod = (
+  start: Date,
+  business: ConfiguracionNegocio,
+): TimePeriod => {
+  const minutes = getLocalTimeMinutes(start, business.timezone);
+  if (minutes < 12 * 60) return 'morning';
+  if (minutes < 18 * 60) return 'afternoon';
+  return 'evening';
+};
+
+const formatPeriodList = (periods: readonly TimePeriod[]): string => {
+  const labels = periods.map((period) => TIME_PERIOD_LABELS[period]);
+  if (labels.length < 2) return labels[0] ?? '';
+  return `${labels.slice(0, -1).join(', ')} y ${labels[labels.length - 1]}`;
+};
+
+const formatTimeOptions = (
+  starts: readonly Date[],
+  business: ConfiguracionNegocio,
+): string => {
+  const options = starts
+    .slice(0, 3)
+    .map((start) => formatBusinessTime(start, business.timezone))
+    .join(', ');
+  return `${options}${starts.length > 3 ? ' y otros horarios' : ''}`;
+};
+
+const PERIOD_DISPLAY_NAMES: Record<TimePeriod, string> = {
+  morning: '🌅 Mañana',
+  afternoon: '🌤️ Tarde',
+  evening: '🌙 Noche',
+};
+
+const formatPeriodOptions = (
+  periods: readonly TimePeriod[],
+  availableStarts: readonly Date[],
+  business: ConfiguracionNegocio,
+): string[] =>
+  periods.map((period) => {
+    const starts = availableStarts.filter(
+      (start) => getTimePeriod(start, business) === period,
+    );
+    return `• ${PERIOD_DISPLAY_NAMES[period]}: ${formatTimeOptions(starts, business)}`;
+  });
+
+export const getAvailabilityPeriodReply = (
+  availableStarts: readonly Date[],
+  business: ConfiguracionNegocio,
+  requestedPeriod?: TimePeriod,
+): string => {
+  const periodsWithAvailability = TIME_PERIODS.filter((period) =>
+    availableStarts.some(
+      (start) => getTimePeriod(start, business) === period,
+    ),
+  );
+  const requestedStarts = requestedPeriod
+    ? availableStarts.filter(
+        (start) => getTimePeriod(start, business) === requestedPeriod,
+      )
+    : [];
+
+  if (requestedPeriod) {
+    if (requestedStarts.length > 0) {
+      return [
+        `✅ Hay disponibilidad en ${TIME_PERIOD_LABELS[requestedPeriod]}:`,
+        ...formatPeriodOptions([requestedPeriod], requestedStarts, business),
+        '🕒 Elige una hora y volveré a comprobarla.',
+      ].join('\n');
+    }
+
+    const otherPeriods = periodsWithAvailability.filter(
+      (period) => period !== requestedPeriod,
+    );
+    if (otherPeriods.length === 0) {
+      return `No encontré horarios disponibles para ese día. ${getFieldPrompt('requestedDate', business)}`;
+    }
+    return [
+      `⚠️ No hay disponibilidad en ${TIME_PERIOD_LABELS[requestedPeriod]}.`,
+      `Sí hay en ${formatPeriodList(otherPeriods)}:`,
+      ...formatPeriodOptions(otherPeriods, availableStarts, business),
+      '🕒 Elige una hora y volveré a comprobarla.',
+    ].join('\n');
+  }
+
+  return [
+    `✅ Encontré disponibilidad en ${formatPeriodList(periodsWithAvailability)}:`,
+    ...formatPeriodOptions(periodsWithAvailability, availableStarts, business),
+    '🕒 ¿Qué hora prefieres? La comprobaré antes de reservar.',
+  ].join('\n');
+};
 
 type InvalidReservationSchedule = Extract<
   ReservationScheduleResult,
@@ -244,6 +382,10 @@ export const getScheduleRejectionReply = (
     case 'insufficient-notice':
       reason = 'Esa hora no cumple la anticipación mínima para reservar.';
       break;
+    case 'past-time':
+      reason =
+        'Esa hora ya pasó para la fecha que elegiste. No moveré la cita a otro día automáticamente; indícame una hora futura o una nueva fecha y hora.';
+      break;
     case 'misaligned-start':
       reason = [
         `La hora de las ${requestedTime ?? 'indicada'} no está alineada con los bloques de la agenda.`,
@@ -264,11 +406,15 @@ export const getScheduleRejectionReply = (
   }
 
   const nextStep = getNextStepForSchedule(issue, business);
+  const hasAlternatives = Boolean(issue.alternatives?.length);
   return [
-    reason,
-    ...(nextStep ? [nextStep] : []),
-    '',
-    getFieldPrompt(issue.field, business),
+    `⚠️ ${reason}`,
+    ...(nextStep ? [`ℹ️ ${nextStep}`] : []),
+    `👉 ${
+      hasAlternatives
+        ? 'Indícame cuál prefieres y volveré a comprobar que siga disponible.'
+        : getFieldPrompt(issue.field, business)
+    }`,
   ].join('\n');
 };
 
@@ -277,7 +423,7 @@ export const getUnexpectedConfirmationReply = (
 ): string => {
   if (intent === 'thanks') {
     return [
-      'Con gusto. Tu solicitud de reserva sigue pendiente y no se ha creado ninguna cita.',
+      '😊 Con gusto. Tu solicitud sigue pendiente; aún no se creó la cita.',
       '',
       CONFIRMATION_OPTIONS,
     ].join('\n');
@@ -285,14 +431,14 @@ export const getUnexpectedConfirmationReply = (
 
   if (intent === 'greeting') {
     return [
-      'Hola. Tu solicitud de reserva sigue pendiente de confirmación y no se ha creado ninguna cita.',
+      '👋 Hola. Tu solicitud sigue pendiente; aún no se creó la cita.',
       '',
       CONFIRMATION_OPTIONS,
     ].join('\n');
   }
 
   return [
-    'No interpreté tu mensaje como una confirmación. La solicitud sigue pendiente y no se ha creado ninguna cita.',
+    '🤔 No entendí tu respuesta. La solicitud sigue pendiente; aún no se creó la cita.',
     '',
     CONFIRMATION_OPTIONS,
   ].join('\n');

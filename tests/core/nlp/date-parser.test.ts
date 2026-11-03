@@ -74,6 +74,17 @@ describe('parseRelativeDate', () => {
     );
   });
 
+  it('keeps today in the business timezone when UTC has already crossed midnight', () => {
+    const lateThursdayInBogota = new Date('2026-10-30T04:00:00.000Z');
+
+    expect(
+      parseRelativeDate('el jueves', {
+        now: lateThursdayInBogota,
+        timeZone: 'America/Bogota',
+      }),
+    ).toEqual(new Date('2026-10-29T00:00:00.000Z'));
+  });
+
   it('moves to the following week only when "próximo" is explicit', () => {
     expect(parseRelativeDate('el próximo miércoles', { now })).toEqual(
       new Date('2026-10-21T00:00:00.000Z'),
@@ -98,6 +109,24 @@ describe('parseRelativeDate', () => {
     expect(parseRelativeDate('hoy', { now, timeZone: 'UTC' })).toEqual(
       new Date('2026-10-15T00:00:00.000Z'),
     );
+  });
+
+  it('resolves a Spanish calendar date to its next occurrence when year is omitted', () => {
+    const octoberNow = new Date('2026-10-29T15:00:00.000Z');
+
+    expect(
+      parseRelativeDate('6 de noviembre', { now: octoberNow }),
+    ).toEqual(new Date('2026-11-06T00:00:00.000Z'));
+    expect(parseRelativeDate('6 de noviembre de 2026', { now })).toEqual(
+      new Date('2026-11-06T00:00:00.000Z'),
+    );
+  });
+
+  it('parses numeric dates in day/month/year order and rejects invalid dates', () => {
+    expect(parseRelativeDate('27/11/2026', { now })).toEqual(
+      new Date('2026-11-27T00:00:00.000Z'),
+    );
+    expect(parseRelativeDate('31/02/2026', { now })).toBeUndefined();
   });
 });
 
@@ -136,5 +165,21 @@ describe('matchDatePhrase', () => {
 
   it('returns undefined for messages without a date', () => {
     expect(matchDatePhrase('quiero una cita')).toBeUndefined();
+  });
+
+  it('classifies numeric and Spanish month dates', () => {
+    expect(matchDatePhrase('el 27/11/2026')).toMatchObject({
+      kind: 'single',
+      type: 'calendar-date',
+      day: 27,
+      month: 11,
+      year: 2026,
+    });
+    expect(matchDatePhrase('6 de noviembre')).toMatchObject({
+      kind: 'single',
+      type: 'calendar-date',
+      day: 6,
+      month: 11,
+    });
   });
 });

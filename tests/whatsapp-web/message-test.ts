@@ -1,5 +1,6 @@
 import qrcode from 'qrcode-terminal';
 import whatsapp from 'whatsapp-web.js';
+import { extractPhoneFromContactId } from '../../src/core/messaging/whatsapp-contact.js';
 
 const { Client, LocalAuth } = whatsapp;
 let whatsappReadyAt: Date | undefined;
@@ -50,6 +51,12 @@ client.on('message', async (message) => {
   }
 
   console.log(`Mensaje detectado de ${message.from}: ${message.body}`);
+  console.log(
+    `Fecha del mensaje: ${new Date(message.timestamp * 1000).toISOString()}`,
+  );
+  console.log(`Tipo de mensaje: ${message.type}`);
+  console.log('rawData completo del mensaje:');
+  console.dir(message.rawData, { depth: null });
 
   try {
     const contact = await message.getContact();
@@ -63,6 +70,7 @@ client.on('message', async (message) => {
           messageId: message.id._serialized,
           messageRemote: message.id.remote,
           contactId: contact.id._serialized,
+          customerPhone: extractPhoneFromContactId(contact.id._serialized) ?? null,
           contactNumber: contact.number,
           contactName: contact.name ?? null,
           contactPushname: contact.pushname,

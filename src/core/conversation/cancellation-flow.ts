@@ -8,6 +8,7 @@ import {
   formatBusinessTime,
 } from '../time/business-time.js';
 import type { ReservationRepository } from '../reservations/reservation-repository.js';
+import type { ReservationCalendar } from '../reservations/reservation-calendar.js';
 import { isExplicitConfirmation } from './booking-changes.js';
 import { appendTurnMessages, type FlowReply } from './turn-utils.js';
 
@@ -20,6 +21,7 @@ export interface CancellationFlowInput {
   conversation: Conversation;
   business: ConfiguracionNegocio;
   reservations: ReservationRepository;
+  calendar: ReservationCalendar;
   normalized: string;
   message: string;
   now: Date;
@@ -83,7 +85,7 @@ const askConfirmation = (
   reply(
     conversation,
     [
-      '¿Confirmas que deseas cancelar esta cita?',
+      '⚠️ ¿Confirmas que deseas cancelar esta cita?',
       '',
       `• ${describeReservation(reservation, business)}`,
       '',
@@ -97,7 +99,7 @@ const askConfirmation = (
 export async function startCancellationFlow(
   input: Omit<CancellationFlowInput, 'normalized'>,
 ): Promise<FlowReply> {
-  const { conversation, business, reservations, message, now } = input;
+  const { conversation, business, reservations, calendar, message, now } = input;
   const upcoming = await reservations.listConfirmedByContact(
     conversation.businessId,
     conversation.contactId,
@@ -109,7 +111,7 @@ export async function startCancellationFlow(
   if (upcoming.length === 0) {
     return reply(
       conversation,
-      'No encuentro citas confirmadas para cancelar. Si quieres agendar una, dime qué servicio deseas.',
+      'ℹ️ No encuentro citas confirmadas para cancelar.\nSi quieres agendar, dime qué servicio deseas.',
       message,
       now,
     );
@@ -126,7 +128,7 @@ export async function startCancellationFlow(
   return reply(
     conversation,
     [
-      'Tienes estas citas confirmadas. ¿Cuál deseas cancelar? Responde con el número.',
+      '🗓️ Tienes estas citas confirmadas. ¿Cuál deseas cancelar? Responde con el número.',
       '',
       ...upcoming.map(
         (reservation, index) =>
@@ -142,8 +144,15 @@ export async function startCancellationFlow(
 export async function continueCancellationFlow(
   input: CancellationFlowInput,
 ): Promise<FlowReply> {
-  const { conversation, business, reservations, normalized, message, now } =
-    input;
+  const {
+    conversation,
+    business,
+    reservations,
+    calendar,
+    normalized,
+    message,
+    now,
+  } = input;
   const pending = conversation.cancellation;
 
   if (!pending) {
@@ -174,7 +183,7 @@ export async function continueCancellationFlow(
       return reply(
         conversation,
         [
-          'No identifiqué cuál cita. Responde con el número:',
+          '🤔 No identifiqué cuál cita. Responde con el número:',
           '',
           ...options.map(
             (item, index) => `${index + 1}. ${describeReservation(item, business)}`,
@@ -197,7 +206,7 @@ export async function continueCancellationFlow(
     delete conversation.cancellation;
     return reply(
       conversation,
-      'Esa cita ya no está confirmada, así que no hay nada que cancelar.',
+      'ℹ️ Esa cita ya no está confirmada, así que no hay nada que cancelar.',
       message,
       now,
     );
@@ -207,6 +216,7 @@ export async function continueCancellationFlow(
     return askConfirmation(conversation, selected, business, message, now);
   }
 
+  await calendar.deleteReservationEvent(business, selected);
   await reservations.update({
     ...selected,
     status: 'cancelled',
@@ -218,7 +228,7 @@ export async function continueCancellationFlow(
 
   return reply(
     conversation,
-    `Tu cita fue cancelada:\n\n• ${describeReservation(selected, business)}\n\nSi quieres agendar otra, escríbeme.`,
+    `✅ Tu cita fue cancelada:\n• ${describeReservation(selected, business)}\n\nSi quieres agendar otra, dime el servicio.`,
     message,
     now,
   );

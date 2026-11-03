@@ -11,7 +11,19 @@ import {
   formatReservationSummary,
 } from '../booking/reservation-summary.js';
 import { validateService } from '../booking/service-validator.js';
-import { parseTimeToMinutes } from '../time/business-time.js';
+import {
+  addDays,
+  combineDateAndTime,
+  getBusinessDateOnly,
+  getDateOnly,
+  getLocalTimeMinutes,
+  parseTimeToMinutes,
+} from '../time/business-time.js';
+import {
+  getAvailableAppointmentStartTimes,
+} from '../booking/appointment-availability.js';
+import type { ExistingAppointment } from '../booking/appointment-schedule.js';
+import type { ReservationCalendar } from '../reservations/reservation-calendar.js';
 import type { ReservationRepository } from '../reservations/reservation-repository.js';
 import { normalizeIntent } from '../nlp/normalize.js';
 import { extractBareCustomerName } from '../nlp/entity-extractor.js';
@@ -26,6 +38,7 @@ import {
   CONFIRMATION_OPTIONS,
   formatFinalConfirmationPrompt,
   formatConfirmedReservationReply,
+  getAvailabilityPeriodReply,
   getFieldPrompt,
   getPromptForData,
   getScheduleRejectionReply,
@@ -37,7 +50,10 @@ import {
   mergeReservationData,
   type ReservationProgressField,
 } from './reservation-progress.js';
-import { validateReservationSchedule } from './reservation-schedule.js';
+import {
+  validateReservationSchedule,
+  type ReservationScheduleResult,
+} from './reservation-schedule.js';
 import { POST_CONFIRMATION_ACK_TIMEOUT_MS } from './post-confirmation-flow.js';
 import {
   appendTurnMessages,
@@ -57,6 +73,9 @@ const ACTIVE_BOOKING_STATES: ReadonlySet<ConversationState> = new Set([
   'awaiting-confirmation',
   'awaiting-final-confirmation',
 ]);
+
+const CHANGE_IN_CONFIRMATION_PATTERN =
+  /\b(?:cambiar|cambia|cambio|cambie|modificar|modifica|corregir|corrige|ajustar|ajusta|reprogramar|reprograma|mover|mueve|muevo|mejor)\b/u;
 
 export const isActiveBookingState = (state: ConversationState): boolean =>
   ACTIVE_BOOKING_STATES.has(state);
@@ -144,8 +163,10 @@ export const getBookingResumePrompt = (
 export interface BookingFlowInput {
   conversation: Conversation;
   intake: ReservationIntake;
+  intentOverride?: ConversationIntent;
   business: ConfiguracionNegocio;
   reservations: ReservationRepository;
+  calendar: ReservationCalendar;
   message: string;
   now: Date;
 }
@@ -153,10 +174,24 @@ export interface BookingFlowInput {
 export async function handleBookingFlow(
   input: BookingFlowInput,
 ): Promise<FlowReply> {
-  const { conversation, intake, business, reservations, message, now } = input;
+  const {
+    conversation,
+    intake,
+    business,
+    reservations,
+    calendar,
+    intentOverride,
+    message,
+    now,
+  } = input;
   const detection = intake.analysis.detection;
+  const intent = intentOverride ?? detection.intent;
 
-  if (detection.intent === 'cancel-appointment') {
+  if (
+    intent === 'cancel-appointment' ||
+    (intent === 'goodbye' &&
+      /^(salir|quiero salir|salir de la reserva)$/u.test(detection.normalized))
+  ) {
     return cancelBooking(conversation, message, now);
   }
 
@@ -170,17 +205,56 @@ export async function handleBookingFlow(
       intake,
       business,
       reservations,
+      calendar,
       message,
       now,
     );
   }
 
   const canApplyReservationData =
-    detection.intent === 'book-appointment' ||
-    detection.intent === 'unknown' ||
-    detection.intent === 'reschedule-appointment' ||
-    detection.intent === 'check-availability';
+    intent === 'book-appointment' ||
+    intent === 'unknown' ||
+    intent === 'reschedule-appointment' ||
+    intent === 'check-availability';
+  const negatedChange =
+    detection.negatedIntents.includes('reschedule-appointment');
   const pendingBeforeMerge = getNextReservationField(conversation.data);
+  const requestedChange = getReservationChangeMapping(
+    detection.normalized,
+    intake.data,
+    CHANGE_INTENTS.has(intent),
+    false,
+    negatedChange,
+  );
+  const hasUnspecifiedChange = requestedChange.fields.some((field) => {
+    if (field === 'serviceId') return !intake.data.serviceId;
+    if (field === 'requestedDate') return !intake.data.requestedDate;
+    if (field === 'requestedTime') {
+      return (
+        !intake.data.requestedTime &&
+        !intake.data.ambiguousTime &&
+        !intake.data.requestedTimeOfDay
+      );
+    }
+    return !intake.data.customerName;
+  });
+  if (hasUnspecifiedChange) {
+    const changedData = applyReservationChanges(
+      conversation.data,
+      intake.data,
+      requestedChange.fields,
+    );
+    return finishBookingTurn(
+      conversation,
+      changedData,
+      business,
+      message,
+      now,
+      reservations,
+      calendar,
+    );
+  }
+
   const incomingData = withClarifiedTime(
     conversation.data,
     intake.data,
@@ -196,7 +270,7 @@ export async function handleBookingFlow(
   if (
     !intake.data.customerName &&
     pendingBeforeMerge === 'customerName' &&
-    (detection.intent === 'unknown' || detection.intent === 'thanks')
+    (intent === 'unknown' || intent === 'thanks')
   ) {
     const customerName = extractBareCustomerName(
       intake.analysis.spelling.text,
@@ -211,10 +285,13 @@ export async function handleBookingFlow(
       intake.data.requestedDate ||
       intake.data.requestedTime ||
       intake.data.ambiguousTime ||
+      intake.data.requestedTimeOfDay ||
       intake.data.customerName,
   );
   const unrecognizedField =
-    detection.intent === 'unknown' &&
+    intent !== 'book-appointment' &&
+    intent !== 'reschedule-appointment' &&
+    intent !== 'check-availability' &&
     !hasRecognizedBookingData &&
     pendingBeforeMerge
       ? pendingBeforeMerge
@@ -226,6 +303,8 @@ export async function handleBookingFlow(
     business,
     message,
     now,
+    reservations,
+    calendar,
     unrecognizedField,
   );
 }
@@ -235,6 +314,7 @@ async function handleConfirmationTurn(
   intake: ReservationIntake,
   business: ConfiguracionNegocio,
   reservations: ReservationRepository,
+  calendar: ReservationCalendar,
   message: string,
   now: Date,
 ): Promise<FlowReply> {
@@ -242,10 +322,24 @@ async function handleConfirmationTurn(
   const normalized = detection.normalized;
 
   if (isExplicitConfirmation(normalized)) {
-    const schedule = validateReservationSchedule(
+    if (conversation.state === 'awaiting-final-confirmation') {
+      return confirmBooking(
+        conversation,
+        business,
+        reservations,
+        calendar,
+        message,
+        now,
+      );
+    }
+
+    const schedule = await validateScheduleWithCalendar(
       business,
       conversation.data,
       now,
+      reservations,
+      calendar,
+      `reservation:${conversation.id}`,
     );
 
     if (schedule.status !== 'valid') {
@@ -255,6 +349,10 @@ async function handleConfirmationTurn(
         business,
         message,
         now,
+        reservations,
+        calendar,
+        undefined,
+        schedule,
       );
     }
 
@@ -265,29 +363,31 @@ async function handleConfirmationTurn(
       occupiedEndsAt: schedule.slot.occupiedEndsAt,
     };
 
-    if (conversation.state === 'awaiting-final-confirmation') {
-      return confirmBooking(conversation, business, reservations, message, now);
-    }
-
     return requestFinalConfirmation(
       conversation,
       business,
       message,
       now,
+      reservations,
+      calendar,
     );
-  }
-
-  if (detection.intent === 'reject-appointment') {
-    return askWhatToDoAfterRejection(conversation, message, now);
   }
 
   const lastQuestion = normalizeIntent(getLastBotQuestion(conversation) ?? '');
   const expectsField = /que dato deseas cambiar/u.test(lastQuestion);
+  const hasChangeLanguage = CHANGE_IN_CONFIRMATION_PATTERN.test(normalized);
+  const acceptsIncomingData =
+    !detection.negatedIntents.includes('reschedule-appointment') &&
+    (CHANGE_INTENTS.has(detection.intent) ||
+      ((detection.intent === 'reject-appointment' ||
+        detection.intent === 'confirm-appointment') &&
+        hasChangeLanguage));
   const change = getReservationChangeMapping(
     normalized,
     intake.data,
-    CHANGE_INTENTS.has(detection.intent),
+    acceptsIncomingData,
     expectsField,
+    detection.negatedIntents.includes('reschedule-appointment'),
   );
 
   if (change.fields.length > 0) {
@@ -297,7 +397,19 @@ async function handleConfirmationTurn(
       change.fields,
     );
 
-    return finishBookingTurn(conversation, changedData, business, message, now);
+    return finishBookingTurn(
+      conversation,
+      changedData,
+      business,
+      message,
+      now,
+      reservations,
+      calendar,
+    );
+  }
+
+  if (detection.intent === 'reject-appointment') {
+    return askWhatToDoAfterRejection(conversation, message, now);
   }
 
   if (change.asksForField || detection.intent === 'reschedule-appointment') {
@@ -319,9 +431,142 @@ function finishBookingTurn(
   business: ConfiguracionNegocio,
   message: string,
   now: Date,
+  reservations: ReservationRepository,
+  calendar: ReservationCalendar,
   unrecognizedField?: ReservationProgressField,
-): FlowReply {
-  const schedule = validateReservationSchedule(business, data, now);
+  scheduleOverride?: ReservationScheduleResult,
+): Promise<FlowReply> {
+  return finishBookingTurnWithSchedule(
+    conversation,
+    data,
+    business,
+    message,
+    now,
+    reservations,
+    calendar,
+    unrecognizedField,
+    scheduleOverride,
+  );
+}
+
+export async function validateScheduleWithCalendar(
+  business: ConfiguracionNegocio,
+  data: ReservationData,
+  now: Date,
+  reservations: ReservationRepository,
+  calendar: ReservationCalendar,
+  excludeReservationId: string,
+): Promise<ReservationScheduleResult> {
+  const localSchedule = validateReservationSchedule(business, data, now);
+  if (localSchedule.status === 'invalid') return localSchedule;
+  if (!data.serviceId || !data.requestedDate || data.ambiguousTime) {
+    return localSchedule;
+  }
+
+  const serviceResult = validateService(business, data.serviceId);
+  if (!serviceResult.valid) {
+    return {
+      status: 'invalid',
+      field: 'serviceId',
+      reason: serviceResult.reason,
+    };
+  }
+
+  const businessDate = getDateOnly(data.requestedDate);
+  const existingAppointments = await getExistingAppointmentsForDate(
+    business,
+    businessDate,
+    reservations,
+    calendar,
+    excludeReservationId,
+  );
+
+  if (localSchedule.status === 'incomplete') {
+    return {
+      ...localSchedule,
+      availableStarts: getAvailableAppointmentStartTimes(business, {
+        dateOnly: businessDate,
+        durationMinutes: serviceResult.value.durationMinutes,
+        now,
+        existingAppointments,
+      }),
+    };
+  }
+
+  return validateReservationSchedule(
+    business,
+    data,
+    now,
+    existingAppointments,
+  );
+}
+
+async function getExistingAppointmentsForDate(
+  business: ConfiguracionNegocio,
+  businessDate: Date,
+  reservations: ReservationRepository,
+  calendar: ReservationCalendar,
+  excludeReservationId: string,
+): Promise<ExistingAppointment[]> {
+  const nextBusinessDate = addDays(businessDate, 1);
+  const from = combineDateAndTime(businessDate, '00:00', business.timezone);
+  const to = combineDateAndTime(nextBusinessDate, '00:00', business.timezone);
+  if (!from || !to) {
+    throw new Error('No se pudo calcular el día de agenda del negocio.');
+  }
+
+  const [calendarAppointments, localReservations] = await Promise.all([
+    calendar.listBusyAppointments(
+      business,
+      from,
+      to,
+      excludeReservationId,
+    ),
+    reservations.listBlockingAppointments(business.businessId, from, to),
+  ]);
+  return [
+    ...calendarAppointments,
+    ...localReservations
+      .filter((reservation) => reservation.id !== excludeReservationId)
+      .map((reservation) => ({
+        startsAt: reservation.startsAt,
+        endsAt: reservation.endsAt,
+        durationMinutes:
+          (reservation.endsAt.getTime() - reservation.startsAt.getTime()) /
+          60_000,
+      })),
+  ];
+}
+
+async function finishBookingTurnWithSchedule(
+  conversation: Conversation,
+  data: ReservationData,
+  business: ConfiguracionNegocio,
+  message: string,
+  now: Date,
+  reservations: ReservationRepository,
+  calendar: ReservationCalendar,
+  unrecognizedField?: ReservationProgressField,
+  scheduleOverride?: ReservationScheduleResult,
+): Promise<FlowReply> {
+  const schedule =
+    scheduleOverride ??
+    (await validateScheduleWithCalendar(
+      business,
+      data,
+      now,
+      reservations,
+      calendar,
+      `reservation:${conversation.id}`,
+    ));
+  const noAvailableStarts =
+    schedule.status === 'incomplete' &&
+    schedule.availableStarts !== undefined &&
+    schedule.availableStarts.length === 0;
+  if (noAvailableStarts) {
+    delete data.requestedDate;
+    delete data.requestedTimeOfDay;
+  }
   const scheduleRejectionReply =
     schedule.status === 'invalid'
       ? getScheduleRejectionReply(schedule, business, data)
@@ -350,6 +595,38 @@ function finishBookingTurn(
     reply =
       scheduleRejectionReply ??
       getScheduleRejectionReply(schedule, business, data);
+  } else if (noAvailableStarts) {
+    reply = [
+      'No encontré horarios disponibles para esa fecha y ese servicio.',
+      '',
+      getFieldPrompt('requestedDate', business),
+    ].join('\n');
+  } else if (
+    schedule.status === 'incomplete' &&
+    schedule.availableStarts &&
+    nextField === 'requestedTime'
+  ) {
+    const requestedPeriod = data.requestedTimeOfDay;
+    if (
+      requestedPeriod &&
+      !schedule.availableStarts.some((start) => {
+        const minutes = getLocalTimeMinutes(start, business.timezone);
+        return (
+          (requestedPeriod === 'morning' && minutes < 12 * 60) ||
+          (requestedPeriod === 'afternoon' &&
+            minutes >= 12 * 60 &&
+            minutes < 18 * 60) ||
+          (requestedPeriod === 'evening' && minutes >= 18 * 60)
+        );
+      })
+    ) {
+      delete data.requestedTimeOfDay;
+    }
+    reply = getAvailabilityPeriodReply(
+      schedule.availableStarts,
+      business,
+      requestedPeriod,
+    );
   } else if (nextField) {
     reply =
       unrecognizedField === nextField
@@ -392,12 +669,13 @@ function cancelBooking(
   return { reply, nextField: null };
 }
 
-// Crea la reserva definitiva (idempotente por conversación). Aún no hay evento
-// externo; el contexto espera un breve agradecimiento antes de cerrarse.
+// Crea primero una reserva provisional y solo confirma tras crear el evento
+// externo. El ID determinístico de Calendar permite reintentar sin duplicarlo.
 async function confirmBooking(
   conversation: Conversation,
   business: ConfiguracionNegocio,
   reservations: ReservationRepository,
+  calendar: ReservationCalendar,
   message: string,
   now: Date,
 ): Promise<FlowReply> {
@@ -409,10 +687,34 @@ async function confirmBooking(
       business,
       message,
       now,
+      reservations,
+      calendar,
     );
   }
 
-  const reservation = await reservations.create({
+  const schedule = await validateScheduleWithCalendar(
+    business,
+    conversation.data,
+    now,
+    reservations,
+    calendar,
+    `reservation:${conversation.id}`,
+  );
+  if (schedule.status !== 'valid') {
+    return finishBookingTurn(
+      conversation,
+      { ...conversation.data },
+      business,
+      message,
+      now,
+      reservations,
+      calendar,
+      undefined,
+      schedule,
+    );
+  }
+
+  const pendingReservation = {
     id: `reservation:${conversation.id}`,
     businessId: conversation.businessId,
     contactId: conversation.contactId,
@@ -420,12 +722,63 @@ async function confirmBooking(
     customerPhone: conversation.customerPhone,
     customerName: summary.customerName,
     serviceId: summary.service.id,
-    startsAt: conversation.data.startsAt ?? summary.startsAt,
-    endsAt: conversation.data.endsAt ?? summary.endsAt,
-    status: 'confirmed',
+    startsAt: schedule.slot.startsAt,
+    endsAt: schedule.slot.endsAt,
+    status: 'pending' as const,
     createdAt: now,
     updatedAt: now,
-  });
+  };
+  let reserved = await reservations.createPendingIfAvailable(
+    pendingReservation,
+  );
+  if (!reserved) {
+    const latestSchedule = await validateScheduleWithCalendar(
+      business,
+      conversation.data,
+      now,
+      reservations,
+      calendar,
+      pendingReservation.id,
+    );
+    if (latestSchedule.status !== 'valid') {
+      return finishBookingTurn(
+        conversation,
+        { ...conversation.data },
+        business,
+        message,
+        now,
+        reservations,
+        calendar,
+        undefined,
+        latestSchedule,
+      );
+    }
+
+    reserved = await reservations.createPendingIfAvailable(pendingReservation);
+    if (!reserved) {
+      throw new Error(
+        'El horario fue reservado por otra solicitud durante la confirmación.',
+      );
+    }
+  }
+
+  const storedReservation = await reservations.getById(pendingReservation.id);
+  if (!storedReservation) {
+    throw new Error(
+      `La reserva "${pendingReservation.id}" no quedó persistida.`,
+    );
+  }
+  const googleCalendarEventId = await calendar.createReservationEvent(
+    business,
+    storedReservation,
+  );
+  const reservation = {
+    ...storedReservation,
+    status: 'confirmed' as const,
+    googleCalendarEventId,
+    updatedAt: now,
+  };
+  await reservations.update(reservation);
   const reply = formatConfirmedReservationReply(
     {
       ...summary,
@@ -446,12 +799,14 @@ async function confirmBooking(
   return { reply, nextField: null };
 }
 
-function requestFinalConfirmation(
+async function requestFinalConfirmation(
   conversation: Conversation,
   business: ConfiguracionNegocio,
   message: string,
   now: Date,
-): FlowReply {
+  reservations: ReservationRepository,
+  calendar: ReservationCalendar,
+): Promise<FlowReply> {
   const summary = buildReservationSummary(business, conversation.data);
   if (!summary) {
     return finishBookingTurn(
@@ -460,6 +815,8 @@ function requestFinalConfirmation(
       business,
       message,
       now,
+      reservations,
+      calendar,
     );
   }
 

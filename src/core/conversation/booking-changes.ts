@@ -40,12 +40,13 @@ export const getReservationChangeMapping = (
   incoming: ReservationData,
   acceptsIncomingData: boolean,
   expectsField: boolean,
+  isNegated = false,
 ): ReservationChangeMapping => {
   const fields = new Set<ReservationProgressField>();
-  const changing = CHANGE_VERB_PATTERN.test(normalized);
+  const changing = !isNegated && CHANGE_VERB_PATTERN.test(normalized);
 
   const addFieldMentions = (allowBare: boolean): void => {
-    if (!allowBare && !changing) return;
+    if ((!allowBare || isNegated) && !changing) return;
 
     if (
       /\bfecha\b/u.test(normalized) ||
@@ -61,14 +62,18 @@ export const getReservationChangeMapping = (
 
   addFieldMentions(expectsField);
 
-  if (OTHER_SERVICE_PATTERN.test(normalized)) {
+  if (!isNegated && OTHER_SERVICE_PATTERN.test(normalized)) {
     fields.add('serviceId');
   }
 
   if (acceptsIncomingData) {
     if (incoming.serviceId) fields.add('serviceId');
     if (incoming.requestedDate) fields.add('requestedDate');
-    if (incoming.requestedTime || incoming.ambiguousTime) {
+    if (
+      incoming.requestedTime ||
+      incoming.ambiguousTime ||
+      incoming.requestedTimeOfDay
+    ) {
       fields.add('requestedTime');
     }
     // Un nombre con prefijo explícito corrige el nombre guardado.
@@ -110,10 +115,16 @@ export const applyReservationChanges = (
     delete updated.ambiguousTime;
     if (incoming.requestedTime) {
       updated.requestedTime = incoming.requestedTime;
+      delete updated.requestedTimeOfDay;
     } else {
       delete updated.requestedTime;
       if (incoming.ambiguousTime) {
         updated.ambiguousTime = incoming.ambiguousTime;
+      }
+      if (incoming.requestedTimeOfDay) {
+        updated.requestedTimeOfDay = incoming.requestedTimeOfDay;
+      } else {
+        delete updated.requestedTimeOfDay;
       }
     }
   }

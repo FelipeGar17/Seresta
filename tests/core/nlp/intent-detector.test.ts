@@ -16,11 +16,15 @@ describe('detectIntent', () => {
   it.each([
     ['Hola, buenos días', 'greeting'],
     ['Quiero sacar una cita', 'book-appointment'],
+    ['Quiero iniciar una reserva', 'book-appointment'],
+    ['Quisiera hacer una reserva para mañana', 'book-appointment'],
     ['Quiero un corte mañana', 'book-appointment'],
     ['¿Qué servicios ofrecen?', 'list-services'],
     ['¿Tienen corte de pelo?', 'list-services'],
     ['¿Cuánto cuesta el corte?', 'check-prices'],
     ['¿Qué horarios tienen disponibles?', 'check-availability'],
+    ['¿Tienes disponibilidad para mañana?', 'check-availability'],
+    ['Tienes servicio para mañana', 'check-availability'],
     ['Quiero cancelar mi cita', 'cancel-appointment'],
     ['Necesito cambiar la cita', 'reschedule-appointment'],
     ['Quiero modificar mi cita antes de confirmarla', 'reschedule-appointment'],
@@ -63,6 +67,15 @@ describe('detectIntent', () => {
     ).toBe('confirm-appointment');
     expect(
       detectIntent('no', { lastBotQuestion: '¿Confirmas esta cita?' }),
+    ).toBe('reject-appointment');
+  });
+
+  it('uses state context to interpret isolated affirmatives and negatives', () => {
+    expect(
+      detectIntent('sí', { shortReplyContext: 'booking-confirmation' }),
+    ).toBe('confirm-appointment');
+    expect(
+      detectIntent('no', { shortReplyContext: 'booking-confirmation' }),
     ).toBe('reject-appointment');
   });
 
@@ -120,6 +133,9 @@ describe('detectIntent — negaciones', () => {
 
   it('keeps negations from activating other reservation intents', () => {
     expect(detectIntent('No quiero reservar una cita')).not.toBe(
+      'book-appointment',
+    );
+    expect(detectIntent('No quiero iniciar una reserva')).not.toBe(
       'book-appointment',
     );
     expect(detectIntent('No quiero cambiar mi cita')).not.toBe(

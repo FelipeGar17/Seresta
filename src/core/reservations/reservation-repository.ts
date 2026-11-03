@@ -6,7 +6,15 @@ export interface ReservationRepository {
   // Idempotente: si ya existe una reserva con el mismo `id`, devuelve la
   // existente sin modificarla.
   create(reservation: Reservation): Promise<Reservation>;
+  // Reserva un intervalo provisional de forma atómica; devuelve false ante
+  // solapamientos con otra reserva pendiente o confirmada.
+  createPendingIfAvailable(reservation: Reservation): Promise<boolean>;
   getById(id: Identifier): Promise<Reservation | null>;
+  listBlockingAppointments(
+    businessId: Identifier,
+    from: Date,
+    to: Date,
+  ): Promise<Reservation[]>;
   // Reservas `confirmed` del contacto que empiezan después de `from`,
   // ordenadas por inicio.
   listConfirmedByContact(
