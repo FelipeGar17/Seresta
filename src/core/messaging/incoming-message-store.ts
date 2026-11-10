@@ -4,7 +4,10 @@ export type IncomingMessageStatus =
   | 'pending'
   | 'processing'
   | 'reply-pending'
-  | 'sent';
+  | 'sent'
+  // Falló demasiadas veces: se conserva para diagnóstico pero deja de
+  // bloquear la cola del contacto.
+  | 'failed';
 
 export interface IncomingMessageRecord {
   messageId: Identifier;
@@ -33,5 +36,7 @@ export interface IncomingMessageStore {
   saveReply(messageId: Identifier, reply: string): Promise<void>;
   markSent(messageId: Identifier): Promise<void>;
   retry(messageId: Identifier): Promise<void>;
+  // Saca el mensaje de la cola definitivamente (cuarentena).
+  markFailed(messageId: Identifier): Promise<void>;
   recoverInterrupted(): Promise<number>;
 }

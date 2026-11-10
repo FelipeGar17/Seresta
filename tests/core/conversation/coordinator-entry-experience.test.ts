@@ -95,16 +95,18 @@ describe('coordinador — orientación inicial', () => {
     expect(result.reply).not.toMatch(/no logré reconocer ese dato/i);
   });
 
-  it('no interpreta opciones del menú durante una reserva activa', async () => {
+  it('no reutiliza una opción numérica fuera del paso que mostró la lista', async () => {
     const { say } = setup();
     await say('quiero agendar una cita');
+    await say('Corte de cabello');
 
     const result = await say('1');
 
-    expect(result.conversation.state).toBe('collecting-service');
-    expect(result.conversation.data.serviceId).toBeUndefined();
-    expect(result.nextField).toBe('serviceId');
-    expect(result.reply).toMatch(/no logré reconocer ese dato/i);
+    expect(result.conversation.state).toBe('collecting-date');
+    expect(result.conversation.data.serviceId).toBe('cut-1');
+    expect(result.conversation.data.requestedDate).toBeUndefined();
+    expect(result.nextField).toBe('requestedDate');
+    expect(result.reply).toMatch(/¿para qué fecha/i);
   });
 
   it('un saludo ofrece opciones sin dar a entender que la reserva ya empezó', async () => {
@@ -182,7 +184,7 @@ describe('coordinador — orientación inicial', () => {
     expect(result.conversation.data).toEqual({});
     expect(result.nextField).toBe('serviceId');
     expect(result.reply).toMatch(/no logré reconocer ese dato/i);
-    expect(result.reply).toMatch(/escribe el nombre del servicio/i);
+    expect(result.reply).toMatch(/escribir el nombre del servicio/i);
     expect(result.reply).toContain('Corte de cabello');
     expect(result.reply).toMatch(/¿qué servicios tienen\?/i);
   });
@@ -195,7 +197,7 @@ describe('coordinador — orientación inicial', () => {
 
     expect(catalog.conversation.state).toBe('collecting-service');
     expect(catalog.reply).toContain('Corte de cabello');
-    expect(catalog.reply).toMatch(/elige|escribe el nombre/i);
+    expect(catalog.reply).toMatch(/elige|escribir el nombre/i);
 
     const selected = await say('Corte de cabello');
     expect(selected.conversation.state).toBe('collecting-date');

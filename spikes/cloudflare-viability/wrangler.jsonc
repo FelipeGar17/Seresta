@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "seresta-cloudflare-viability",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-01-01",
+  "secrets": {
+    "required": ["META_WEBHOOK_VERIFY_TOKEN", "META_APP_SECRET"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "seresta-viability",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

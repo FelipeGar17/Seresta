@@ -47,13 +47,25 @@ export const getWhatsAppMessageId = (
 
 export interface WhatsAppWebConnectorOptions {
   headless?: boolean;
+  // Intentos de reconexión tras una caída ya estando listos. Con 0 no se
+  // reintenta y se informa el fallo de inmediato.
+  reconnectAttempts?: number;
+  // Espera del primer reintento; se duplica en cada intento posterior.
+  reconnectBaseDelayMs?: number;
+  // Se invoca cuando se agotan los reintentos y hace falta intervención.
+  onFatalError?: (error: Error) => void;
 }
 
 export class WhatsAppWebConnector implements WhatsAppConnector {
   private readonly client: InstanceType<typeof Client>;
+  private readonly reconnectAttempts: number;
+  private readonly reconnectBaseDelayMs: number;
+  private readonly onFatalError?: (error: Error) => void;
   private readyAt?: Date;
   private intakeQueue: Promise<void> = Promise.resolve();
   private readinessTask: Promise<void> = Promise.resolve();
+  private reconnectTimer?: ReturnType<typeof setTimeout>;
+  private closing = false;
 
   constructor(options: WhatsAppWebConnectorOptions = {}) {
     this.client = new Client({
@@ -63,6 +75,21 @@ export class WhatsAppWebConnector implements WhatsAppConnector {
       }),
       puppeteer: { headless: options.headless ?? false },
     });
+    this.reconnectAttempts = options.reconnectAttempts ?? 5;
+    this.reconnectBaseDelayMs = options.reconnectBaseDelayMs ?? 5_000;
+    if (
+      !Number.isSafeInteger(this.reconnectAttempts) ||
+      this.reconnectAttempts < 0
+    ) {
+      throw new Error('reconnectAttempts debe ser un entero no negativo');
+    }
+    if (
+      !Number.isFinite(this.reconnectBaseDelayMs) ||
+      this.reconnectBaseDelayMs <= 0
+    ) {
+      throw new Error('reconnectBaseDelayMs debe ser un número mayor que cero');
+    }
+    this.onFatalError = options.onFatalError;
   }
 
   async start(
@@ -72,16 +99,60 @@ export class WhatsAppWebConnector implements WhatsAppConnector {
     let resolveReadiness: (() => void) | undefined;
     let rejectReadiness: ((error: Error) => void) | undefined;
     let readinessSettled = false;
-    let readyWorkStarted = false;
+    let hasBeenReady = false;
+    let reconnectAttempt = 0;
     const readiness = new Promise<void>((resolve, reject) => {
       resolveReadiness = resolve;
       rejectReadiness = reject;
     });
 
+    const settleReadiness = (): void => {
+      if (readinessSettled) return;
+      readinessSettled = true;
+      resolveReadiness?.();
+    };
+
     const failBeforeReady = (error: Error): void => {
       if (readinessSettled) return;
       readinessSettled = true;
       rejectReadiness?.(error);
+    };
+
+    const scheduleReconnect = (reason: string): void => {
+      if (this.closing || this.reconnectTimer) return;
+
+      if (reconnectAttempt >= this.reconnectAttempts) {
+        const error = new Error(
+          `WhatsApp se desconectó (${reason}) y no se pudo reconectar tras ${reconnectAttempt} intentos.`,
+        );
+        console.error(error.message);
+        if (this.onFatalError) {
+          this.onFatalError(error);
+        } else {
+          process.exitCode = 1;
+        }
+        return;
+      }
+
+      reconnectAttempt += 1;
+      const delayMs =
+        this.reconnectBaseDelayMs * 2 ** (reconnectAttempt - 1);
+      console.warn(
+        `Reintentando conexión con WhatsApp en ${Math.round(delayMs / 1000)} s (intento ${reconnectAttempt}/${this.reconnectAttempts}).`,
+      );
+
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = undefined;
+        if (this.closing) return;
+        // whatsapp-web.js llama a destroy() al desconectarse; initialize()
+        // vuelve a abrir el navegador con la sesión local ya guardada.
+        this.client.initialize().catch((error: unknown) => {
+          const detail = error instanceof Error ? error.message : String(error);
+          console.error(`Falló el intento de reconexión con WhatsApp: ${detail}`);
+          scheduleReconnect(detail);
+        });
+      }, delayMs);
+      this.reconnectTimer.unref?.();
     };
 
     this.client.on('qr', (qr: string) => {
@@ -94,18 +165,21 @@ export class WhatsAppWebConnector implements WhatsAppConnector {
     });
 
     this.client.on('ready', () => {
-      if (readyWorkStarted) return;
-      readyWorkStarted = true;
       this.readyAt = new Date();
+      hasBeenReady = true;
+      reconnectAttempt = 0;
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = undefined;
+      }
       console.log(
         `WhatsApp listo para ${this.client.info.pushname ?? 'la cuenta autenticada'}.`,
       );
-      this.readinessTask = Promise.resolve()
+
+      this.readinessTask = this.readinessTask
+        .catch(() => undefined)
         .then(onReady)
-        .then(() => {
-          readinessSettled = true;
-          resolveReadiness?.();
-        })
+        .then(settleReadiness)
         .catch((error: unknown) => {
           const detail = error instanceof Error ? error.message : String(error);
           console.error(`No se pudo recuperar la cola de WhatsApp: ${detail}`);
@@ -211,9 +285,14 @@ export class WhatsAppWebConnector implements WhatsAppConnector {
 
     this.client.on('disconnected', (reason: string) => {
       console.error(`WhatsApp se desconectó: ${reason}`);
-      failBeforeReady(
-        new Error(`WhatsApp se desconectó antes de estar listo: ${reason}`),
-      );
+      if (!hasBeenReady) {
+        failBeforeReady(
+          new Error(`WhatsApp se desconectó antes de estar listo: ${reason}`),
+        );
+        return;
+      }
+      if (this.closing) return;
+      scheduleReconnect(reason);
     });
 
     await Promise.all([this.client.initialize(), readiness]);
@@ -224,6 +303,11 @@ export class WhatsAppWebConnector implements WhatsAppConnector {
   }
 
   async close(): Promise<void> {
+    this.closing = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
     await this.client.destroy();
     await this.intakeQueue;
     await this.readinessTask;

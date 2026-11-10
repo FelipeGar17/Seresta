@@ -1,5 +1,8 @@
 import type { Identifier, Reservation } from '../types.js';
-import type { ReservationRepository } from './reservation-repository.js';
+import {
+  isSamePendingReservation,
+  type ReservationRepository,
+} from './reservation-repository.js';
 
 const copy = (reservation: Reservation): Reservation => ({ ...reservation });
 
@@ -20,7 +23,7 @@ export class MemoryReservationRepository implements ReservationRepository {
     }
 
     const existing = this.reservations.get(reservation.id);
-    if (existing) return true;
+    if (existing) return isSamePendingReservation(existing, reservation);
 
     const overlaps = [...this.reservations.values()].some(
       (candidate) =>
@@ -81,6 +84,22 @@ export class MemoryReservationRepository implements ReservationRepository {
     }
 
     this.reservations.set(reservation.id, copy(reservation));
+  }
+
+  async deleteStalePendingBefore(cutoff: Date): Promise<number> {
+    let deleted = 0;
+
+    for (const [id, reservation] of this.reservations) {
+      if (
+        reservation.status === 'pending' &&
+        reservation.createdAt < cutoff
+      ) {
+        this.reservations.delete(id);
+        deleted += 1;
+      }
+    }
+
+    return deleted;
   }
 
   async deleteCancelledBefore(cutoff: Date): Promise<number> {

@@ -6,15 +6,17 @@ import type {
 import type { ReservationIntake } from '../booking/reservation-intake.js';
 import { resolveServiceMatch } from '../booking/service-resolution.js';
 import {
-  formatBusinessDate,
   formatBusinessTime,
+  formatBusinessTime24,
+  formatCalendarDate,
 } from '../time/business-time.js';
 import type { ReservationCalendar } from '../reservations/reservation-calendar.js';
 import type { ReservationRepository } from '../reservations/reservation-repository.js';
 import {
-  getAvailabilityPeriodReply,
+  getAvailabilityReply,
   getPromptForData,
   getScheduleRejectionReply,
+  getSelectableServices,
 } from './booking-replies.js';
 import { validateScheduleWithCalendar } from './booking-flow.js';
 import { mergeReservationData } from './reservation-progress.js';
@@ -22,22 +24,37 @@ import {
   appendTurnMessages,
   type FlowReply,
 } from './turn-utils.js';
+import {
+  clearOfferedOptions,
+  MAX_NUMBERED_OPTIONS,
+  OPTION_SELECTION_INSTRUCTION,
+  resolveOfferedOption,
+  setOfferedOptions,
+} from './offered-options.js';
 
 const NO_RESERVATION_NOTE =
   'Para reservar, escribe *agendar*. Aún no he creado ninguna cita.';
 
 const createServicePrompt = (business: ConfiguracionNegocio): string => {
-  const services = business.services
-    .filter((service) => service.active)
-    .map((service) => `• ${service.name}`);
+  const services = getSelectableServices(business);
 
   return [
     '✂️ ¿Para qué servicio quieres consultar la disponibilidad?',
-    ...(services.length > 0 ? ['', 'Disponibles:', ...services] : []),
+    ...(services.length > 0
+      ? [
+          '',
+          'Disponibles:',
+          ...services.map(
+            (service, index) => `${index + 1}. ${service.name}`,
+          ),
+          '',
+          OPTION_SELECTION_INSTRUCTION,
+        ]
+      : []),
     '',
     'ℹ️ Para revisar la disponibilidad, necesito saber el servicio; cada uno tiene una duración distinta.',
     '',
-    'Escribe el nombre del servicio.',
+    'También puedes escribir el nombre del servicio.',
   ].join('\n');
 };
 
@@ -110,6 +127,22 @@ export async function handleAvailabilityInquiry(
       ? { ambiguousTime: intake.data.ambiguousTime }
       : {}),
   };
+  const normalized = intake.analysis.detection.normalized;
+  const selectedService = resolveOfferedOption(
+    conversation,
+    normalized,
+    'service',
+  );
+  if (selectedService) {
+    incomingData.serviceId = selectedService;
+  }
+  const selectedTime = resolveOfferedOption(conversation, normalized, 'time');
+  if (selectedTime) {
+    incomingData.requestedTime = formatBusinessTime24(
+      new Date(selectedTime),
+      business.timezone,
+    );
+  }
   const data = mergeReservationData(
     isContinuation ? conversation.data : {},
     incomingData,
@@ -126,20 +159,33 @@ export async function handleAvailabilityInquiry(
 
   if (serviceResolution?.status === 'ambiguous') {
     delete data.serviceId;
+    const candidates = serviceResolution.candidates.slice(
+      0,
+      MAX_NUMBERED_OPTIONS,
+    );
     const reply = [
       '🔎 Hay varios servicios que coinciden. ¿Cuál quieres consultar?',
-      ...serviceResolution.candidates.map(
-        (service) => `• ${service.name}`,
+      ...candidates.map(
+        (service, index) => `${index + 1}. ${service.name}`,
       ),
+      '',
+      OPTION_SELECTION_INSTRUCTION,
     ].join('\n');
-    return finishInquiryTurn(
+    const result = finishInquiryTurn(
       conversation,
       data,
       message,
       reply,
       'serviceId',
+      business,
       now,
     );
+    setOfferedOptions(
+      conversation,
+      'service',
+      candidates.map((service) => service.id),
+    );
+    return result;
   }
 
   if (
@@ -165,6 +211,7 @@ export async function handleAvailabilityInquiry(
       message,
       reply,
       'serviceId',
+      business,
       now,
     );
   }
@@ -177,6 +224,7 @@ export async function handleAvailabilityInquiry(
       message,
       prompt.reply,
       prompt.nextField,
+      business,
       now,
     );
   }
@@ -202,6 +250,7 @@ export async function handleAvailabilityInquiry(
       message,
       reply,
       schedule.field,
+      business,
       now,
     );
   }
@@ -218,6 +267,7 @@ export async function handleAvailabilityInquiry(
       message,
       reply,
       null,
+      business,
       now,
     );
   }
@@ -239,7 +289,7 @@ export async function handleAvailabilityInquiry(
     }
 
     const reply = [
-      `😕 No encuentro horarios disponibles para ${service.name} el ${formatBusinessDate(data.requestedDate, business.timezone)}.`,
+      `😕 No encuentro horarios disponibles para ${service.name} el ${formatCalendarDate(data.requestedDate)}.`,
       'Prueba otra fecha y la reviso.',
       '',
       NO_RESERVATION_NOTE,
@@ -250,27 +300,32 @@ export async function handleAvailabilityInquiry(
       message,
       reply,
       'requestedDate',
+      business,
       now,
     );
   }
 
-  const reply = [
-    getAvailabilityPeriodReply(
-      schedule.availableStarts,
-      business,
-      data.requestedTimeOfDay,
-    ),
-    '',
-    NO_RESERVATION_NOTE,
-  ].join('\n');
-  return finishInquiryTurn(
+  const availability = getAvailabilityReply(
+    schedule.availableStarts,
+    business,
+    data.requestedTimeOfDay,
+  );
+  const reply = [availability.reply, '', NO_RESERVATION_NOTE].join('\n');
+  const result = finishInquiryTurn(
     conversation,
     data,
     message,
     reply,
     'requestedTime',
+    business,
     now,
   );
+  setOfferedOptions(
+    conversation,
+    'time',
+    availability.options.map((start) => start.toISOString()),
+  );
+  return result;
 }
 
 const finishInquiryTurn = (
@@ -279,12 +334,24 @@ const finishInquiryTurn = (
   message: string,
   reply: string,
   nextField: FlowReply['nextField'],
+  business: ConfiguracionNegocio,
   now: Date,
 ): FlowReply => {
   conversation.data = data;
   conversation.intent = 'check-availability';
   conversation.state = 'checking-availability';
   conversation.updatedAt = now;
+
+  if (nextField === 'serviceId') {
+    setOfferedOptions(
+      conversation,
+      'service',
+      getSelectableServices(business).map((service) => service.id),
+    );
+  } else {
+    clearOfferedOptions(conversation);
+  }
+
   appendTurnMessages(conversation, message, reply, now);
 
   return { reply, nextField };

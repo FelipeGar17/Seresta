@@ -15,7 +15,11 @@ import {
   getWeekdayOfDateOnly,
 } from '../time/business-time.js';
 import { MAX_BOOKING_DAYS_AHEAD } from '../booking/booking-date-policy.js';
-import { formatBusinessDate, formatBusinessTime } from '../time/business-time.js';
+import {
+  formatBusinessDate,
+  formatBusinessTime,
+  formatCalendarDate,
+} from '../time/business-time.js';
 import {
   formatDuration,
   formatPrice,
@@ -23,6 +27,10 @@ import {
 } from '../booking/reservation-summary.js';
 import type { ReservationProgressField } from './reservation-progress.js';
 import type { ReservationScheduleResult } from './reservation-schedule.js';
+import {
+  MAX_NUMBERED_OPTIONS,
+  OPTION_SELECTION_INSTRUCTION,
+} from './offered-options.js';
 
 // Textos que el flujo de reserva le muestra al cliente.
 const WEEKDAY_NAMES = [
@@ -134,24 +142,37 @@ export const formatFinalConfirmationPrompt = (
 export const CONFIRMATION_OPTIONS =
   'Responde *Sí, confirmar*, *Cambiar algún dato* o *Cancelar*.';
 
+// Catálogo activo en el mismo orden que la lista numerada del prompt.
+export const getSelectableServices = (
+  business?: ConfiguracionNegocio,
+): ConfiguracionNegocio['services'] =>
+  business?.services
+    .filter((service) => service.active)
+    .slice(0, MAX_NUMBERED_OPTIONS) ?? [];
+
 export const getFieldPrompt = (
   field: ReservationProgressField,
   business?: ConfiguracionNegocio,
 ): string => {
   if (field === 'serviceId') {
-    const services =
-      business?.services
-        .filter((service) => service.active)
-        .map((service) => `• ${service.name}`) ?? [];
+    const services = getSelectableServices(business);
     return [
       '✂️ ¿Qué servicio deseas agendar?',
       ...(services.length > 0
-        ? ['', 'Disponibles:', ...services]
+        ? [
+            '',
+            'Disponibles:',
+            ...services.map(
+              (service, index) => `${index + 1}. ${service.name}`,
+            ),
+            '',
+            OPTION_SELECTION_INSTRUCTION,
+          ]
         : []),
       '',
       'ℹ️ Para revisar la disponibilidad, necesito saber el servicio; cada uno tiene una duración distinta.',
       '',
-      'Escribe el nombre del servicio o pregunta «¿qué servicios tienen?» para ver precios.',
+      'También puedes escribir el nombre del servicio o preguntar «¿qué servicios tienen?» para ver precios.',
     ].join('\n');
   }
   if (field === 'requestedDate') {
@@ -187,7 +208,7 @@ export const getUnrecognizedFieldReply = (
       ? `✂️ Servicio: ya registrado${serviceName ? ` (${serviceName})` : ''}`
       : undefined,
     data.requestedDate
-      ? `📅 Fecha: ${formatBusinessDate(data.requestedDate, business.timezone)}`
+      ? `📅 Fecha: ${formatCalendarDate(data.requestedDate)}`
       : undefined,
     data.requestedTime ? `🕒 Hora: ${data.requestedTime}` : undefined,
     data.customerName ? `👤 Nombre: ${data.customerName}` : undefined,
@@ -253,79 +274,114 @@ const formatPeriodList = (periods: readonly TimePeriod[]): string => {
   return `${labels.slice(0, -1).join(', ')} y ${labels[labels.length - 1]}`;
 };
 
-const formatTimeOptions = (
-  starts: readonly Date[],
-  business: ConfiguracionNegocio,
-): string => {
-  const options = starts
-    .slice(0, 3)
-    .map((start) => formatBusinessTime(start, business.timezone))
-    .join(', ');
-  return `${options}${starts.length > 3 ? ' y otros horarios' : ''}`;
-};
-
 const PERIOD_DISPLAY_NAMES: Record<TimePeriod, string> = {
   morning: '🌅 Mañana',
   afternoon: '🌤️ Tarde',
   evening: '🌙 Noche',
 };
 
-const formatPeriodOptions = (
-  periods: readonly TimePeriod[],
-  availableStarts: readonly Date[],
+const formatNumberedPeriodOptions = (
+  starts: readonly Date[],
   business: ConfiguracionNegocio,
-): string[] =>
-  periods.map((period) => {
-    const starts = availableStarts.filter(
+): string[] => {
+  const lines: string[] = [];
+  let number = 0;
+
+  for (const period of TIME_PERIODS) {
+    const periodStarts = starts.filter(
       (start) => getTimePeriod(start, business) === period,
     );
-    return `• ${PERIOD_DISPLAY_NAMES[period]}: ${formatTimeOptions(starts, business)}`;
-  });
+    if (periodStarts.length === 0) continue;
 
-export const getAvailabilityPeriodReply = (
+    lines.push(PERIOD_DISPLAY_NAMES[period]);
+    for (const start of periodStarts) {
+      number += 1;
+      lines.push(`${number}. ${formatBusinessTime(start, business.timezone)}`);
+    }
+  }
+
+  return lines;
+};
+
+export interface AvailabilityOptionsReply {
+  reply: string;
+  // Instantes ofrecidos, en el mismo orden que los números del texto.
+  options: Date[];
+}
+
+export const getAvailabilityReply = (
   availableStarts: readonly Date[],
   business: ConfiguracionNegocio,
   requestedPeriod?: TimePeriod,
-): string => {
+): AvailabilityOptionsReply => {
   const periodsWithAvailability = TIME_PERIODS.filter((period) =>
     availableStarts.some(
       (start) => getTimePeriod(start, business) === period,
     ),
   );
-  const requestedStarts = requestedPeriod
-    ? availableStarts.filter(
-        (start) => getTimePeriod(start, business) === requestedPeriod,
-      )
-    : [];
+
+  const withOptions = (
+    headerLines: readonly string[],
+    starts: readonly Date[],
+  ): AvailabilityOptionsReply => {
+    const options = starts.slice(0, MAX_NUMBERED_OPTIONS);
+    const remaining =
+      starts.length > MAX_NUMBERED_OPTIONS
+        ? [
+            '…y más horarios disponibles; dime una hora concreta o el periodo que prefieras.',
+          ]
+        : [];
+
+    return {
+      reply: [
+        ...headerLines,
+        ...formatNumberedPeriodOptions(options, business),
+        ...remaining,
+        `🕒 ${OPTION_SELECTION_INSTRUCTION}`,
+      ].join('\n'),
+      options,
+    };
+  };
 
   if (requestedPeriod) {
+    const requestedStarts = availableStarts.filter(
+      (start) => getTimePeriod(start, business) === requestedPeriod,
+    );
+
     if (requestedStarts.length > 0) {
-      return [
-        `✅ Hay disponibilidad en ${TIME_PERIOD_LABELS[requestedPeriod]}:`,
-        ...formatPeriodOptions([requestedPeriod], requestedStarts, business),
-        '🕒 Elige una hora y volveré a comprobarla.',
-      ].join('\n');
+      return withOptions(
+        [`✅ Hay disponibilidad en ${TIME_PERIOD_LABELS[requestedPeriod]}:`],
+        requestedStarts,
+      );
     }
 
     const otherPeriods = periodsWithAvailability.filter(
       (period) => period !== requestedPeriod,
     );
     if (otherPeriods.length === 0) {
-      return `No encontré horarios disponibles para ese día. ${getFieldPrompt('requestedDate', business)}`;
+      return {
+        reply: `No encontré horarios disponibles para ese día. ${getFieldPrompt('requestedDate', business)}`,
+        options: [],
+      };
     }
-    return [
-      `⚠️ No hay disponibilidad en ${TIME_PERIOD_LABELS[requestedPeriod]}.`,
-      `Sí hay en ${formatPeriodList(otherPeriods)}:`,
-      ...formatPeriodOptions(otherPeriods, availableStarts, business),
-      '🕒 Elige una hora y volveré a comprobarla.',
-    ].join('\n');
+
+    return withOptions(
+      [
+        `⚠️ No hay disponibilidad en ${TIME_PERIOD_LABELS[requestedPeriod]}.`,
+        `Sí hay en ${formatPeriodList(otherPeriods)}:`,
+      ],
+      availableStarts.filter((start) =>
+        otherPeriods.includes(getTimePeriod(start, business)),
+      ),
+    );
   }
 
-  return [
-    `✅ Encontré disponibilidad en ${formatPeriodList(periodsWithAvailability)}:`,
-    ...formatPeriodOptions(periodsWithAvailability, availableStarts, business),
-    '🕒 ¿Qué hora prefieres? La comprobaré antes de reservar.',
-  ].join('\n');
+  return withOptions(
+    [
+      `✅ Encontré disponibilidad en ${formatPeriodList(periodsWithAvailability)}:`,
+    ],
+    availableStarts,
+  );
 };
 
 type InvalidReservationSchedule = Extract<

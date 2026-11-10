@@ -92,6 +92,7 @@ describe('coordinador — consultas de catálogo sin reserva activa', () => {
 
   it.each([
     ['¿Cuánto cuesta el corte de cabello?', '$25.000'],
+    ['Cuánto vale el corte de cabello y barba', '$40.000'],
     ['¿Cuánto vale la barba?', '$15.000'],
     ['¿Cuánto cuesta el corte y barba?', '$40.000'],
     ['¿Cuánto sale la barba?', '$15.000'],
@@ -111,6 +112,18 @@ describe('coordinador — consultas de catálogo sin reserva activa', () => {
 
     expect(result.reply).not.toContain('$25.000');
     expect(result.reply).not.toContain('$15.000');
+  });
+
+  it('durante una reserva responde el precio del servicio compuesto mencionado naturalmente', async () => {
+    const { say } = setup();
+    await say('Quiero reservar una cita');
+
+    const result = await say('Cuánto vale el corte de cabello y barba');
+
+    expect(result.reply).toContain('Corte y barba: $40.000');
+    expect(result.reply).not.toContain('$25.000');
+    expect(result.conversation.state).toBe('collecting-service');
+    expect(result.nextField).toBe('serviceId');
   });
 
   it('una consulta ambigua pide aclaración sin elegir servicio ni precio', async () => {

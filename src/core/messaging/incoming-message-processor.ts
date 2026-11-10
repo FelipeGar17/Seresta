@@ -28,15 +28,32 @@ export interface ReceivedWhatsAppMessage {
   receivedAt: Date;
 }
 
+// Tras estos intentos fallidos el mensaje sale de la cola para no bloquear al
+// contacto. El runtime lo reintenta periódicamente mientras esté pendiente.
+export const DEFAULT_MAX_FAILED_ATTEMPTS = 5;
+
+export interface IncomingMessageProcessorOptions {
+  maxFailedAttempts?: number;
+}
+
 export class IncomingMessageProcessor {
   private readonly contactTasks = new Map<Identifier, Promise<void>>();
+  private readonly maxFailedAttempts: number;
 
   constructor(
     private readonly store: IncomingMessageStore,
     private readonly coordinator: IncomingConversationHandler,
     private readonly transport: IncomingMessageTransport,
     private readonly business: ConfiguracionNegocio,
-  ) {}
+    options: IncomingMessageProcessorOptions = {},
+  ) {
+    const maxFailedAttempts =
+      options.maxFailedAttempts ?? DEFAULT_MAX_FAILED_ATTEMPTS;
+    if (!Number.isSafeInteger(maxFailedAttempts) || maxFailedAttempts < 1) {
+      throw new Error('maxFailedAttempts debe ser un entero mayor que cero');
+    }
+    this.maxFailedAttempts = maxFailedAttempts;
+  }
 
   async recover(): Promise<void> {
     const recovered = await this.store.recoverInterrupted();
@@ -118,21 +135,43 @@ export class IncomingMessageProcessor {
           });
           await this.store.saveReply(record.messageId, result.reply);
         } catch (error) {
-          try {
-            await this.store.retry(record.messageId);
-          } catch (retryError) {
-            const detail =
-              retryError instanceof Error
-                ? retryError.message
-                : String(retryError);
-            console.error(
-              `No se pudo reponer el mensaje ${record.messageId} en la cola: ${detail}`,
-            );
-          }
           const detail = error instanceof Error ? error.message : String(error);
           console.error(
             `No se pudo procesar el mensaje ${record.messageId}: ${detail}`,
           );
+
+          const nextAttempts = record.failedAttempts + 1;
+          if (nextAttempts >= this.maxFailedAttempts) {
+            try {
+              await this.store.markFailed(record.messageId);
+              console.error(
+                `Mensaje ${record.messageId} en cuarentena tras ${nextAttempts} intentos fallidos.`,
+              );
+            } catch (quarantineError) {
+              const quarantineDetail =
+                quarantineError instanceof Error
+                  ? quarantineError.message
+                  : String(quarantineError);
+              console.error(
+                `No se pudo poner en cuarentena el mensaje ${record.messageId}: ${quarantineDetail}`,
+              );
+              return;
+            }
+            // Continúa con el siguiente mensaje del contacto.
+            continue;
+          }
+
+          try {
+            await this.store.retry(record.messageId);
+          } catch (retryError) {
+            const retryDetail =
+              retryError instanceof Error
+                ? retryError.message
+                : String(retryError);
+            console.error(
+              `No se pudo reponer el mensaje ${record.messageId} en la cola: ${retryDetail}`,
+            );
+          }
           return;
         }
 

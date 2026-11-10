@@ -88,6 +88,21 @@ describe('matchService', () => {
     });
   });
 
+  it('reconoce un servicio compuesto aunque se agregue un modificador antes de «y»', () => {
+    const comboCatalog: ServiceCatalogEntry[] = [
+      { id: 'haircut', name: 'Corte de cabello' },
+      { id: 'combo', name: 'Corte y barba' },
+      { id: 'beard', name: 'Arreglo de barba' },
+    ];
+
+    expect(
+      matchService('Cuánto vale el corte de cabello y barba', comboCatalog),
+    ).toEqual({
+      status: 'matched',
+      service: comboCatalog[1],
+    });
+  });
+
   it('reporta como ambiguas las coincidencias con la misma longitud', () => {
     const tiedCatalog: ServiceCatalogEntry[] = [
       { id: 'a', name: 'Corte de pelo' },
@@ -104,6 +119,26 @@ describe('matchService', () => {
     expect(matchService('quiero una pintura de pelo', catalog)).toEqual({
       status: 'matched',
       service: catalog[2],
+    });
+  });
+
+  it('interpreta variaciones comunes como cabello/pelo', () => {
+    expect(matchService('quiero un corte de pelo', catalog)).toEqual({
+      status: 'matched',
+      service: catalog[0],
+    });
+  });
+
+  it('prefiere el servicio combinado cuando el cliente pide corte de pelo y barba', () => {
+    const comboCatalog: ServiceCatalogEntry[] = [
+      { id: 'cut', name: 'Corte de cabello', aliases: ['corte'] },
+      { id: 'combo', name: 'Corte y barba' },
+      { id: 'beard', name: 'Arreglo de barba', aliases: ['barba'] },
+    ];
+
+    expect(matchService('quiero un corte de pelo y barba', comboCatalog)).toEqual({
+      status: 'matched',
+      service: comboCatalog[1],
     });
   });
 });

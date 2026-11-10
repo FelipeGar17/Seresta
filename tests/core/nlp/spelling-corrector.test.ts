@@ -12,6 +12,10 @@ describe('correctSpelling', () => {
     ['Kiero un corte', 'Quiero un corte'],
     ['KIERO un corte', 'QUIERO un corte'],
     ['kiero cambiar la hora a laas 9:45pm', 'quiero cambiar la hora a las 9:45pm'],
+    ['ajendame una cita', 'agendarme una cita'],
+    ['kansele mi cita', 'cancele mi cita'],
+    ['tienen disponibel manana', 'tienen disponible manana'],
+    ['porfabor agendar', 'por favor agendar'],
   ])('corrige "%s"', (input, expected) => {
     const result = correctSpelling(input);
     expect(result.text).toBe(expected);
@@ -23,6 +27,8 @@ describe('correctSpelling', () => {
     'quiero un corte mañana a las 3 pm',
     'me llamo Laasya',
     'el kierokeno',
+    'agendar mi cita',
+    'disponible hoy',
     '',
   ])('no modifica "%s"', (input) => {
     const result = correctSpelling(input);
@@ -53,5 +59,14 @@ describe('analyzeMessageWithCatalog con corrección ortográfica', () => {
     expect(analysis.detection.intent).toBe('book-appointment');
     expect(analysis.entities.time).toBe('15:00');
     expect(analysis.spelling.applied).toHaveLength(2);
+  });
+
+  it('detecta la intención tras corregir errores comunes', () => {
+    expect(
+      analyzeMessageWithCatalog('ajendame una cita', undefined).detection.intent,
+    ).toBe('book-appointment');
+    expect(
+      analyzeMessageWithCatalog('kansele mi cita', undefined).detection.intent,
+    ).toBe('cancel-appointment');
   });
 });

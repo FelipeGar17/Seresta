@@ -456,6 +456,82 @@ export const SPELLING_RULES: readonly SpellingRule[] = [
     right: 'noches',
     reason: 'Confusión z/s; "nochez" no es palabra válida.',
   },
+
+  // --- Variantes coloquiales y erratas frecuentes (expansión segura) ---
+  {
+    id: 'ajendar-agendar',
+    wrong: ['ajendar', 'ajenda'],
+    right: 'agendar',
+    reason:
+      'Sustitución j/g en "agendar"; las formas con j no son válidas en este uso.',
+  },
+  {
+    id: 'ajendame-agendarme',
+    wrong: ['ajendame', 'ajendeme'],
+    right: 'agendarme',
+    reason: 'Sustitución j/g con pronombre; la forma correcta conserva el pronombre.',
+  },
+  {
+    id: 'ajendo-agendo',
+    wrong: ['ajendo'],
+    right: 'agendo',
+    reason: 'Sustitución j/g; "ajendo" no es palabra válida.',
+  },
+  {
+    id: 'disponibel-disponible',
+    wrong: ['disponibel', 'disponibl'],
+    right: 'disponible',
+    reason: 'Confusión e/i o omisión de vocal final; ninguna forma es palabra válida.',
+  },
+  {
+    id: 'cancelasion-cancelacion',
+    wrong: ['cancelasion'],
+    right: 'cancelacion',
+    reason: 'Confusión s/c; "cancelasion" no es palabra válida.',
+  },
+  {
+    id: 'confirmasion-confirmacion',
+    wrong: ['confirmasion', 'comfirmacion'],
+    right: 'confirmacion',
+    reason: 'Confusión s/c o m/n; ninguna forma es palabra válida.',
+  },
+  {
+    id: 'acitir-asistir',
+    wrong: ['acitir', 'asitir'],
+    right: 'asistir',
+    reason: 'Transposición u omisión de letras; ninguna forma es palabra válida.',
+  },
+  {
+    id: 'nesecidad-necesidad',
+    wrong: ['nesecidad', 'nesesidad'],
+    right: 'necesidad',
+    reason: 'Confusión s/c; ninguna forma es palabra válida.',
+  },
+  {
+    id: 'kanselar-cancelar',
+    wrong: ['kanselar'],
+    right: 'cancelar',
+    reason: 'Sustitución k/c y s/c; "kanselar" no es palabra válida.',
+  },
+  {
+    id: 'kansele-cancele',
+    wrong: ['kansele'],
+    right: 'cancele',
+    reason: 'Sustitución k/c y s/c; "kansele" no es palabra válida.',
+  },
+  {
+    id: 'kanselarla-cancelarla',
+    wrong: ['kanselarla'],
+    right: 'cancelarla',
+    reason: 'Sustitución k/c y s/c con pronombre; "kanselarla" no es palabra válida.',
+  },
+  {
+    id: 'porfabor-por-favor',
+    wrong: ['porfabor', 'porfaborr'],
+    right: 'por favor',
+    reason:
+      'Unión y confusión b/v; se corrige a dos palabras para no alterar el significado.',
+  },
 ];
 
 const WORD_CHARS = '\\p{Letter}\\p{Number}';

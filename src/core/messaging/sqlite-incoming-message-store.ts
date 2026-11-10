@@ -31,6 +31,7 @@ const isIncomingMessageStatus = (
     'processing',
     'reply-pending',
     'sent',
+    'failed',
   ].includes(value);
 
 const parseDate = (value: string): Date => {
@@ -106,7 +107,7 @@ export class SqliteIncomingMessageStore implements IncomingMessageStore {
       .prepare(
         `SELECT contact_id
          FROM whatsapp_inbox
-         WHERE status != 'sent'
+         WHERE status NOT IN ('sent', 'failed')
          GROUP BY contact_id
          ORDER BY MIN(sequence)`,
       )
@@ -124,7 +125,7 @@ export class SqliteIncomingMessageStore implements IncomingMessageStore {
                 customer_phone, body, received_at, status, reply,
                 failed_attempts
          FROM whatsapp_inbox
-         WHERE contact_id = ? AND status != 'sent'
+         WHERE contact_id = ? AND status NOT IN ('sent', 'failed')
          ORDER BY sequence
          LIMIT 1`,
       )
@@ -195,6 +196,20 @@ export class SqliteIncomingMessageStore implements IncomingMessageStore {
       .prepare(
         `UPDATE whatsapp_inbox
          SET status = 'pending', failed_attempts = failed_attempts + 1
+         WHERE message_id = ? AND status = 'processing'`,
+      )
+      .run(messageId);
+
+    if (result.changes === 0) {
+      throw new Error(`WhatsApp inbox message "${messageId}" is not processing`);
+    }
+  }
+
+  async markFailed(messageId: Identifier): Promise<void> {
+    const result = this.database
+      .prepare(
+        `UPDATE whatsapp_inbox
+         SET status = 'failed'
          WHERE message_id = ? AND status = 'processing'`,
       )
       .run(messageId);

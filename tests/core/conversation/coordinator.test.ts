@@ -210,6 +210,7 @@ describe('ConversationCoordinator', () => {
     expect(fullDay.conversation.data.serviceId).toBe('cut-1');
     expect(fullDay.nextField).toBe('requestedDate');
     expect(fullDay.reply).toMatch(/no encuentro horarios disponibles/i);
+    expect(fullDay.reply).toContain('viernes, 16 de octubre de 2026');
     expect(fullDay.reply).toMatch(/no he creado ninguna cita/i);
 
     const nextDate = await coordinator.handleMessage(

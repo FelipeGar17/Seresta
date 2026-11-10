@@ -134,6 +134,32 @@ describe('flujo conversacional con SQLite', () => {
     expect(resumed.reply).toMatch(/disponibilidad/i);
   });
 
+  it('conserva las opciones numeradas de servicio después de reabrir SQLite', async () => {
+    const path = await createDatabasePath();
+    const firstStorage = openStorage(path);
+    const firstCoordinator = createCoordinator(firstStorage, 'booking-options');
+    const prompt = await send(firstCoordinator, 'Quiero agendar una cita');
+
+    expect(prompt.conversation.offeredOptions).toEqual({
+      kind: 'service',
+      values: ['cut-1'],
+    });
+    firstStorage.close();
+    openedStorages.splice(openedStorages.indexOf(firstStorage), 1);
+
+    const reopenedStorage = openStorage(path);
+    const reopenedCoordinator = createCoordinator(
+      reopenedStorage,
+      'booking-after-restart',
+    );
+    const selected = await send(reopenedCoordinator, '1');
+
+    expect(selected.conversation.id).toBe('booking-options');
+    expect(selected.conversation.state).toBe('collecting-date');
+    expect(selected.conversation.data.serviceId).toBe('cut-1');
+    expect(selected.reply).toMatch(/¿para qué fecha/i);
+  });
+
   it('mantiene la cita y la cancelación pendiente después de reiniciar el motor', async () => {
     const path = await createDatabasePath();
     const firstStorage = openStorage(path);

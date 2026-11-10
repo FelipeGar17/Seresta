@@ -395,6 +395,82 @@ describe('detectIntent — Fase 6: consulta de catálogo frente a reserva', () =
   });
 });
 
+describe('detectIntent — ampliación de vocabulario y excepciones', () => {
+  it.each([
+    ['Agéndame para mañana', 'book-appointment'],
+    ['Resérveme un espacio', 'book-appointment'],
+    ['Quisiera programar una cita', 'book-appointment'],
+    ['Me gustaría agendar', 'book-appointment'],
+    ['Para agendar, por favor', 'book-appointment'],
+    ['Me da una cita para el viernes', 'book-appointment'],
+    ['Quiero que me reserven una hora', 'book-appointment'],
+  ] as const)('interprets booking phrasing "%s" as %s', (message, expected) => {
+    expect(detectIntent(message)).toBe(expected);
+  });
+
+  it.each([
+    ['¿Hay citas disponibles mañana?', 'check-availability'],
+    ['Tienen agenda abierta hoy', 'check-availability'],
+    ['¿Qué días trabajan?', 'check-availability'],
+    ['¿Atienden mañana?', 'check-availability'],
+    ['Cuál es el horario de atención', 'check-availability'],
+    ['¿Tienen turnos disponibles?', 'check-availability'],
+  ] as const)('interprets availability phrasing "%s" as %s', (message, expected) => {
+    expect(detectIntent(message)).toBe(expected);
+  });
+
+  it.each([
+    ['Quiero ver el catálogo de servicios', 'list-services'],
+    ['Me muestra los servicios', 'list-services'],
+    ['¿Con qué servicios cuentan?', 'list-services'],
+  ] as const)('interprets service phrasing "%s" as %s', (message, expected) => {
+    expect(detectIntent(message)).toBe(expected);
+  });
+
+  it.each([
+    ['Ya no quiero la cita', 'cancel-appointment'],
+    ['Quiero anular mi cita', 'cancel-appointment'],
+    ['Ya no voy a ir a la cita', 'cancel-appointment'],
+    ['Por favor cancelen mi cita', 'cancel-appointment'],
+  ] as const)('interprets cancellation phrasing "%s" as %s', (message, expected) => {
+    expect(detectIntent(message)).toBe(expected);
+  });
+
+  it.each([
+    ['Quisiera reagendar mi cita', 'reschedule-appointment'],
+    ['Me pueden cambiar la cita para otro día', 'reschedule-appointment'],
+    ['Reprogramarla para otra hora', 'reschedule-appointment'],
+    ['Quiero mover mi turno', 'reschedule-appointment'],
+  ] as const)('interprets reschedule phrasing "%s" as %s', (message, expected) => {
+    expect(detectIntent(message)).toBe(expected);
+  });
+
+  it('keeps expanded negations from activating the positive intent', () => {
+    expect(detectIntent('No deseo hacer una cita')).not.toBe('book-appointment');
+    expect(detectIntent('No quiero programar una cita')).not.toBe(
+      'book-appointment',
+    );
+    expect(detectIntent('No deseo aplazar mi cita')).not.toBe(
+      'reschedule-appointment',
+    );
+    expect(detectIntent('No quiero borrar mi cita')).not.toBe(
+      'cancel-appointment',
+    );
+  });
+
+  it('preserves multi-intent detection with expanded phrases', () => {
+    const detection = detectIntentDetailed(
+      'Quisiera reagendar mi cita y saber el precio',
+    );
+    expect(detection.intent).toBe('reschedule-appointment');
+    expect(detection.intents).toContain('check-prices');
+  });
+
+  it('does not treat ambiguous short affirmatives as booking without context', () => {
+    expect(detectIntent('de una')).toBe('unknown');
+  });
+});
+
 describe('detectIntent — sin catálogo', () => {
   it('falls back to generic patterns when there is no catalog', () => {
     expect(detectIntent('Quiero un corte mañana')).toBe('book-appointment');

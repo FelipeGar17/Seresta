@@ -218,6 +218,17 @@ export function formatBusinessDate(
 }
 
 /**
+ * Fecha legible de una fecha calendario (medianoche UTC).
+ *
+ * No aplica la zona del negocio: la fecha ya representa un día concreto y
+ * desplazarla por el desfase la mostraría un día antes en zonas UTC negativas.
+ * Para instantes (inicio de una cita, por ejemplo) usar `formatBusinessDate`.
+ */
+export function formatCalendarDate(dateOnly: Date): string {
+  return getDisplayFormatter('UTC', true).format(dateOnly);
+}
+
+/**
  * Hora legible en la zona del negocio ("3:00 p. m.").
  */
 export function formatBusinessTime(
@@ -225,6 +236,20 @@ export function formatBusinessTime(
   timeZone: string = DEFAULT_TIME_ZONE,
 ): string {
   return getDisplayFormatter(timeZone, false).format(date);
+}
+
+/**
+ * Hora de entrada en formato "HH:mm" en la zona del negocio. Se usa cuando el
+ * texto debe volver al flujo como si el cliente la hubiera escrito.
+ */
+export function formatBusinessTime24(
+  date: Date,
+  timeZone: string = DEFAULT_TIME_ZONE,
+): string {
+  const minutes = getLocalTimeMinutes(date, timeZone);
+  const hour = Math.floor(minutes / 60);
+  const minute = minutes % 60;
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 
 /**

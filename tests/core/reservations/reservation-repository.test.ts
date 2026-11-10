@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { MemoryReservationRepository } from '../../../src/core/reservations/memory-reservation-repository.js';
 import {
   DEFAULT_CANCELLED_RETENTION_DAYS,
+  DEFAULT_STALE_PENDING_MINUTES,
   purgeCancelledReservations,
+  purgeStalePendingReservations,
 } from '../../../src/core/reservations/reservation-retention.js';
 import type { Reservation } from '../../../src/core/types.js';
 
@@ -51,6 +53,30 @@ describe('MemoryReservationRepository', () => {
     });
   });
 
+  it('createPendingIfAvailable es idempotente solo con el mismo contenido', async () => {
+    const repository = new MemoryReservationRepository();
+    const pending = reservation('r1', { status: 'pending' });
+
+    await expect(repository.createPendingIfAvailable(pending)).resolves.toBe(
+      true,
+    );
+    await expect(repository.createPendingIfAvailable(pending)).resolves.toBe(
+      true,
+    );
+
+    const changed = reservation('r1', {
+      status: 'pending',
+      startsAt: new Date('2026-11-05T21:00:00.000Z'),
+      endsAt: new Date('2026-11-05T21:30:00.000Z'),
+    });
+    await expect(repository.createPendingIfAvailable(changed)).resolves.toBe(
+      false,
+    );
+    await expect(repository.getById('r1')).resolves.toMatchObject({
+      startsAt: pending.startsAt,
+    });
+  });
+
   it('lista solo confirmadas, futuras, del contacto y ordenadas por inicio', async () => {
     const repository = new MemoryReservationRepository();
     await repository.create(
@@ -77,6 +103,52 @@ describe('MemoryReservationRepository', () => {
       new MemoryReservationRepository().update(reservation('missing')),
     ).rejects.toThrow(/does not exist/);
   });
+});
+
+describe('purgeStalePendingReservations', () => {
+  it('elimina solo provisionales abandonadas y nunca confirmadas', async () => {
+    const repository = new MemoryReservationRepository();
+    await repository.create(
+      reservation('old-pending', {
+        status: 'pending',
+        createdAt: daysAgo(2),
+      }),
+    );
+    await repository.create(
+      reservation('recent-pending', {
+        status: 'pending',
+        createdAt: daysAgo(0),
+      }),
+    );
+    await repository.create(
+      reservation('old-confirmed', { createdAt: daysAgo(2) }),
+    );
+
+    await expect(
+      purgeStalePendingReservations(repository, now, 60),
+    ).resolves.toBe(1);
+
+    await expect(repository.getById('old-pending')).resolves.toBeNull();
+    await expect(repository.getById('recent-pending')).resolves.not.toBeNull();
+    await expect(repository.getById('old-confirmed')).resolves.not.toBeNull();
+  });
+
+  it('el plazo por defecto es de 60 minutos', () => {
+    expect(DEFAULT_STALE_PENDING_MINUTES).toBe(60);
+  });
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    'rechaza un plazo inválido (%s)',
+    async (minutes) => {
+      await expect(
+        purgeStalePendingReservations(
+          new MemoryReservationRepository(),
+          now,
+          minutes,
+        ),
+      ).rejects.toThrow(/mayor que cero/);
+    },
+  );
 });
 
 describe('purgeCancelledReservations', () => {

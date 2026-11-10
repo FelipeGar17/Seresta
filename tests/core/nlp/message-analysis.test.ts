@@ -53,13 +53,12 @@ describe('analyzeMessage', () => {
       createBusiness([service]),
     );
 
-    expect(analysis.catalog).toEqual([
-      {
-        id: 'srv-corte',
-        name: 'Corte de cabello',
-        aliases: ['corte'],
-      },
-    ]);
+    expect(analysis.catalog).toHaveLength(1);
+    expect(analysis.catalog[0]).toMatchObject({
+      id: 'srv-corte',
+      name: 'Corte de cabello',
+    });
+    expect(analysis.catalog[0]?.aliases).toEqual(expect.arrayContaining(['corte']));
     expect(analysis.detection.intent).toBe('book-appointment');
     expect(
       analysis.detection.frames.some((frame) => frame.catalogBacked),

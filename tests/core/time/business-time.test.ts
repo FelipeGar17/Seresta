@@ -3,6 +3,8 @@ import {
   DEFAULT_TIME_ZONE,
   addDays,
   combineDateAndTime,
+  formatBusinessDate,
+  formatCalendarDate,
   getBusinessDateOnly,
   getDateOnly,
   getLocalCalendarDate,
@@ -54,6 +56,18 @@ describe('getBusinessDateOnly', () => {
       dateOnly('2026-10-15'),
     );
     expect(DEFAULT_TIME_ZONE).toBe('America/Bogota');
+  });
+});
+
+describe('formatCalendarDate', () => {
+  it('no desplaza la fecha calendario en zonas UTC negativas', () => {
+    // Medianoche UTC del jueves 15; formatearla en Bogota daría miércoles 14.
+    expect(formatCalendarDate(dateOnly('2026-10-15'))).toBe(
+      'jueves, 15 de octubre de 2026',
+    );
+    expect(formatBusinessDate(dateOnly('2026-10-15'), 'America/Bogota')).toBe(
+      'miércoles, 14 de octubre de 2026',
+    );
   });
 });
 

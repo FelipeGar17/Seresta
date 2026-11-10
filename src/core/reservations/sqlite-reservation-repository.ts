@@ -3,7 +3,10 @@ import {
   initializeSqliteSchema,
   type SqliteDatabase,
 } from '../storage/sqlite-schema.js';
-import type { ReservationRepository } from './reservation-repository.js';
+import {
+  isSamePendingReservation,
+  type ReservationRepository,
+} from './reservation-repository.js';
 
 type SerializedReservation = Omit<
   Reservation,
@@ -84,9 +87,14 @@ export class SqliteReservationRepository implements ReservationRepository {
 
     const createIfAvailable = this.database.transaction(() => {
       const current = this.database
-        .prepare('SELECT status FROM reservations WHERE id = ?')
-        .get(reservation.id) as { status: string } | undefined;
-      if (current) return true;
+        .prepare('SELECT payload FROM reservations WHERE id = ?')
+        .get(reservation.id) as { payload: string } | undefined;
+      if (current) {
+        return isSamePendingReservation(
+          decodeReservation(current.payload),
+          reservation,
+        );
+      }
 
       const rows = this.database
         .prepare(
@@ -203,6 +211,31 @@ export class SqliteReservationRepository implements ReservationRepository {
     if (result.changes === 0) {
       throw new Error(`Reservation "${reservation.id}" does not exist`);
     }
+  }
+
+  async deleteStalePendingBefore(cutoff: Date): Promise<number> {
+    const rows = this.database
+      .prepare(`SELECT payload FROM reservations WHERE status = 'pending'`)
+      .all() as { payload: string }[];
+    const staleIds = rows
+      .map(({ payload }) => decodeReservation(payload))
+      .filter(
+        (reservation) =>
+          reservation.status === 'pending' && reservation.createdAt < cutoff,
+      )
+      .map((reservation) => reservation.id);
+
+    const remove = this.database.transaction((ids: string[]) => {
+      const statement = this.database.prepare(
+        `DELETE FROM reservations WHERE id = ? AND status = 'pending'`,
+      );
+      return ids.reduce(
+        (deleted, id) => deleted + Number(statement.run(id).changes),
+        0,
+      );
+    });
+
+    return remove(staleIds);
   }
 
   async deleteCancelledBefore(cutoff: Date): Promise<number> {

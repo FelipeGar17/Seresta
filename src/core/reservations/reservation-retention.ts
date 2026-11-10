@@ -18,3 +18,21 @@ export async function purgeCancelledReservations(
   const cutoff = new Date(now.getTime() - retentionDays * MILLISECONDS_PER_DAY);
   return repository.deleteCancelledBefore(cutoff);
 }
+
+// Una reserva provisional que no se confirmó en este tiempo se considera
+// abandonada: deja de bloquear su horario. Es mayor que el TTL de la
+// conversación (10 minutos) para no interferir con una confirmación en curso.
+export const DEFAULT_STALE_PENDING_MINUTES = 60;
+
+export async function purgeStalePendingReservations(
+  repository: ReservationRepository,
+  now: Date,
+  maxAgeMinutes: number = DEFAULT_STALE_PENDING_MINUTES,
+): Promise<number> {
+  if (!Number.isFinite(maxAgeMinutes) || maxAgeMinutes <= 0) {
+    throw new Error('maxAgeMinutes debe ser un número mayor que cero');
+  }
+
+  const cutoff = new Date(now.getTime() - maxAgeMinutes * 60 * 1000);
+  return repository.deleteStalePendingBefore(cutoff);
+}

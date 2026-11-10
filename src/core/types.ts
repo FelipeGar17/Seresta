@@ -161,6 +161,16 @@ export interface ConversationMessage {
   createdAt: Date;
 }
 
+// Opciones numeradas que el bot acaba de ofrecer. Solo se interpretan si el
+// último mensaje del bot contiene la instrucción de selección y el estado del
+// flujo corresponde: así un "2" no se confunde con una hora, un nombre o una
+// confirmación.
+export interface OfferedOptions {
+  kind: "service" | "time";
+  // IDs de servicio o instantes ISO-8601, en el mismo orden que los números.
+  values: string[];
+}
+
 export interface Conversation {
   id: Identifier;
   businessId: Identifier;
@@ -174,6 +184,7 @@ export interface Conversation {
   // Citas confirmadas candidatas a cancelación mientras el estado es
   // `awaiting-cancellation`; `selectedId` queda fijado al elegir una.
   cancellation?: { reservationIds: Identifier[]; selectedId?: Identifier };
+  offeredOptions?: OfferedOptions;
   expiresAt: Date | null;
   createdAt: Date;
   updatedAt: Date;

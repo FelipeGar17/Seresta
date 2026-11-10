@@ -1,5 +1,9 @@
 import type { ServiceCatalogEntry, ServiceMatch } from '../types.js';
 import { normalizeIntent } from './normalize.js';
+import {
+  canonicalizeServiceText,
+  expandServicePhraseVariants,
+} from './service-term-equivalences.js';
 
 /**
  * Normalización de nombres de servicio: sin mayúsculas, sin tildes y sin
@@ -11,15 +15,35 @@ import { normalizeIntent } from './normalize.js';
 export const normalizeServiceName = (name: string): string =>
   normalizeIntent(name);
 
-// Comprueba que la frase aparezca completa, sin cortar palabras.
-const containsPhrase = (message: string, phrase: string): boolean =>
-  new RegExp(
+const getPhraseMatchLength = (message: string, phrase: string): number => {
+  const exactMatch = new RegExp(
     `(^|[^\\p{Letter}\\p{Number}])${phrase.replace(
       /[.*+?^${}()|[\]\\]/g,
       '\\$&',
     )}([^\\p{Letter}\\p{Number}]|$)`,
     'u',
-  ).test(message);
+  ).exec(message);
+  const exactLength = exactMatch?.[0].trim().length ?? 0;
+
+  const words = phrase.split(/\s+/u);
+  const conjunctionIndex = words.indexOf('y');
+  if (conjunctionIndex <= 0 || conjunctionIndex === words.length - 1) {
+    return exactLength;
+  }
+
+  const beforeConjunction = words.slice(0, conjunctionIndex);
+  const afterConjunction = words.slice(conjunctionIndex + 1);
+  const coordinatedPattern = new RegExp(
+    `(^|[^\\p{Letter}\\p{Number}])${beforeConjunction
+      .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+      .join('\\s+')}(?:\\s+[\\p{Letter}\\p{Number}]+){0,2}\\s+y\\s+${afterConjunction
+      .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+      .join('\\s+')}([^\\p{Letter}\\p{Number}]|$)`,
+    'u',
+  ).exec(message);
+
+  return Math.max(exactLength, coordinatedPattern?.[0].trim().length ?? 0);
+};
 
 interface ServicePhrase {
   service: ServiceCatalogEntry;
@@ -28,10 +52,14 @@ interface ServicePhrase {
 
 const collectPhrases = (services: ServiceCatalogEntry[]): ServicePhrase[] =>
   services.flatMap((service) =>
-    [service.name, ...(service.aliases ?? [])].map((phrase) => ({
-      service,
-      phrase: normalizeServiceName(phrase),
-    })),
+    [service.name, ...(service.aliases ?? [])].flatMap((phrase) => {
+      const normalized = normalizeServiceName(phrase);
+      if (!normalized) return [];
+      const variants = [
+        ...new Set([normalized, ...expandServicePhraseVariants(phrase)]),
+      ];
+      return variants.map((variant) => ({ service, phrase: variant }));
+    }),
   );
 
 const RELATED_GENERIC_WORDS: ReadonlySet<string> = new Set([
@@ -53,7 +81,7 @@ const stemWord = (word: string): string =>
 
 const significantWords = (text: string): Set<string> =>
   new Set(
-    (normalizeServiceName(text).match(/[\p{Letter}\p{Number}]+/gu) ?? [])
+    (canonicalizeServiceText(text).match(/[\p{Letter}\p{Number}]+/gu) ?? [])
       .filter((word) => word.length >= 4)
       .map(stemWord)
       .filter((word) => !RELATED_GENERIC_WORDS.has(word)),
@@ -81,9 +109,10 @@ export function findRelatedServices(
 /**
  * Resuelve una petición de servicio contra el catálogo del negocio.
  *
- * Compara nombres y alias normalizados. Si varias entradas del catálogo
- * coinciden con la misma especificidad, el resultado es ambiguo: el motor no
- * elige por su cuenta y el bot debe preguntar al cliente.
+ * Compara nombres y alias normalizados (incluidas variantes comunes como
+ * "pelo"/"cabello"). Si varias entradas del catálogo coinciden con la misma
+ * especificidad, el resultado es ambiguo: el motor no elige por su cuenta y el
+ * bot debe preguntar al cliente.
  */
 export function matchService(
   text: string,
@@ -93,15 +122,27 @@ export function matchService(
 
   const message = normalizeServiceName(text);
   if (!message) return { status: 'not-found' };
+  const canonicalMessage = canonicalizeServiceText(text);
+  const messages = [
+    ...new Set([message, canonicalMessage].filter(Boolean)),
+  ];
 
-  // Longitud de la frase más larga con la que coincide cada servicio.
+  // Longitud de la coincidencia más extensa con cada servicio.
   const bestLengthByService = new Map<ServiceCatalogEntry, number>();
 
   for (const { service, phrase } of collectPhrases(services)) {
-    if (!phrase || !containsPhrase(message, phrase)) continue;
+    if (!phrase) continue;
+    let matchLength = 0;
+    for (const candidateMessage of messages) {
+      matchLength = Math.max(
+        matchLength,
+        getPhraseMatchLength(candidateMessage, phrase),
+      );
+    }
+    if (matchLength === 0) continue;
 
     const current = bestLengthByService.get(service) ?? 0;
-    if (phrase.length > current) bestLengthByService.set(service, phrase.length);
+    if (matchLength > current) bestLengthByService.set(service, matchLength);
   }
 
   if (bestLengthByService.size === 0) return { status: 'not-found' };

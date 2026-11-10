@@ -4,11 +4,17 @@ import type { WhatsAppConnector } from './connectors/whatsapp/whatsapp-connector
 import { WhatsAppWebConnector } from './connectors/whatsapp/whatsapp-web-connector.js';
 import { ConversationCoordinator } from './core/conversation/coordinator.js';
 import { IncomingMessageProcessor } from './core/messaging/incoming-message-processor.js';
-import { purgeCancelledReservations } from './core/reservations/reservation-retention.js';
+import {
+  purgeCancelledReservations,
+  purgeStalePendingReservations,
+} from './core/reservations/reservation-retention.js';
 import {
   DEFAULT_SQLITE_PATH,
   openSqliteStorage,
 } from './core/storage/sqlite-storage.js';
+
+// Cada cuánto se reintenta la cola y se depuran conversaciones/reservas vencidas.
+const MAINTENANCE_INTERVAL_MS = 20_000;
 
 const main = async (): Promise<void> => {
   const businessConfigPath =
@@ -30,7 +36,21 @@ const main = async (): Promise<void> => {
   );
   let whatsapp: WhatsAppConnector | undefined;
   let processor: IncomingMessageProcessor | undefined;
+  let maintenanceTimer: ReturnType<typeof setInterval> | undefined;
+  let fatalErrorHandler: ((error: Error) => void) | undefined;
   let shuttingDown = false;
+
+  const purgeStalePending = async (): Promise<void> => {
+    const purged = await purgeStalePendingReservations(
+      storage.reservations,
+      new Date(),
+    );
+    if (purged > 0) {
+      console.log(
+        `Reservas provisionales abandonadas depuradas: ${purged}.`,
+      );
+    }
+  };
 
   try {
     const purgedReservations = await purgeCancelledReservations(
@@ -40,22 +60,49 @@ const main = async (): Promise<void> => {
     if (purgedReservations > 0) {
       console.log(`Citas canceladas antiguas depuradas: ${purgedReservations}.`);
     }
+    await purgeStalePending();
 
     const coordinator = new ConversationCoordinator(storage.conversations, {
       reservations: storage.reservations,
       calendar,
     });
+    const connector = new WhatsAppWebConnector({
+      onFatalError: (error) => fatalErrorHandler?.(error),
+    });
+    whatsapp = connector;
     const messageProcessor = new IncomingMessageProcessor(
       storage.incomingMessages,
       coordinator,
-      (whatsapp = new WhatsAppWebConnector()),
+      connector,
       business,
     );
     processor = messageProcessor;
 
+    // Reintenta la cola y ejecuta la retención sin bloquear la atención de
+    // mensajes. Un tick lento no debe solaparse con el siguiente.
+    let maintenanceRunning = false;
+    const runMaintenance = async (): Promise<void> => {
+      if (maintenanceRunning || shuttingDown) return;
+      maintenanceRunning = true;
+      try {
+        await messageProcessor.drainPending();
+        await storage.conversations.deleteExpired();
+        await purgeStalePending();
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        console.error(`Falló el mantenimiento periódico: ${detail}`);
+      } finally {
+        maintenanceRunning = false;
+      }
+    };
+
     const shutdown = async (signal: string): Promise<void> => {
       if (shuttingDown) return;
       shuttingDown = true;
+      if (maintenanceTimer) {
+        clearInterval(maintenanceTimer);
+        maintenanceTimer = undefined;
+      }
       console.log(`${signal}: cerrando WhatsApp y SQLite...`);
       try {
         await whatsapp?.close();
@@ -66,6 +113,14 @@ const main = async (): Promise<void> => {
           storage.close();
         }
       }
+    };
+
+    fatalErrorHandler = (error: Error): void => {
+      console.error(`WhatsApp requiere intervención: ${error.message}`);
+      process.exitCode = 1;
+      void shutdown('WhatsApp desconectado').catch((closeError: unknown) => {
+        console.error('Error al cerrar tras la desconexión:', closeError);
+      });
     };
 
     process.once('SIGINT', () => {
@@ -84,10 +139,19 @@ const main = async (): Promise<void> => {
     await whatsapp.start(
       (message) => messageProcessor.accept(message),
       async () => {
+        // Idempotente: se repite en cada reconexión para recuperar el trabajo
+        // que quedó interrumpido mientras WhatsApp estaba caído.
         await messageProcessor.recover();
         await storage.conversations.deleteExpired();
+        await purgeStalePending();
       },
     );
+
+    maintenanceTimer = setInterval(() => {
+      void runMaintenance();
+    }, MAINTENANCE_INTERVAL_MS);
+    maintenanceTimer.unref?.();
+
     console.log('Sistema iniciado. Esperando mensajes de WhatsApp.');
   } catch (error) {
     try {

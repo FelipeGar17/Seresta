@@ -192,4 +192,49 @@ describe('analyzeReservationMessage', () => {
       analyzeReservationMessage('Quiero un corte', createDuplicateAliasBusiness()),
     ).toThrow(ConfigurationError);
   });
+
+  it('resuelve el servicio combinado aunque el cliente diga "corte de pelo y barba"', () => {
+    const config = parseBusinessConfig({
+      ...externalConfig,
+      servicios: [
+        {
+          id: 'cut-1',
+          nombre: 'Corte de cabello',
+          aliases: ['corte'],
+          precio: 25_000,
+          duracionMinutos: 30,
+          activo: true,
+        },
+        {
+          id: 'combo-1',
+          nombre: 'Corte y barba',
+          aliases: [],
+          precio: 40_000,
+          duracionMinutos: 50,
+          activo: true,
+        },
+        {
+          id: 'beard-1',
+          nombre: 'Arreglo de barba',
+          aliases: ['barba'],
+          precio: 18_000,
+          duracionMinutos: 20,
+          activo: true,
+        },
+      ],
+    });
+
+    const intake = analyzeReservationMessage(
+      'quiero un corte de pelo y barba',
+      config,
+      { now },
+    );
+
+    expect(intake.serviceResolution?.status).toBe('resolved');
+    if (intake.serviceResolution?.status !== 'resolved') {
+      throw new Error('Se esperaba un servicio resuelto');
+    }
+    expect(intake.serviceResolution.service.id).toBe('combo-1');
+    expect(intake.data.serviceId).toBe('combo-1');
+  });
 });

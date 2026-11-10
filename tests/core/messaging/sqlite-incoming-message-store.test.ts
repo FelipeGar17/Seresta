@@ -65,6 +65,66 @@ describe('SqliteIncomingMessageStore', () => {
     }
   });
 
+  it('excluye de la cola los mensajes en cuarentena', async () => {
+    const storage = openSqliteStorage(':memory:');
+    try {
+      const receivedAt = new Date('2026-10-15T15:00:00.000Z');
+      const input = {
+        messageId: 'message-1',
+        businessId: 'business-1',
+        contactId: 'contact-1@lid',
+        body: 'veneno',
+        receivedAt,
+      };
+      await storage.incomingMessages.enqueue(input);
+      await storage.incomingMessages.enqueue({
+        ...input,
+        messageId: 'message-2',
+        body: 'siguiente',
+      });
+      await storage.incomingMessages.claim('message-1');
+      await storage.incomingMessages.markFailed('message-1');
+
+      await expect(
+        storage.incomingMessages.getNextUndelivered('contact-1@lid'),
+      ).resolves.toMatchObject({ messageId: 'message-2' });
+      await expect(
+        storage.database
+          .prepare(
+            `SELECT status, body FROM whatsapp_inbox WHERE message_id = ?`,
+          )
+          .get('message-1'),
+      ).toEqual({ status: 'failed', body: 'veneno' });
+
+      await storage.incomingMessages.claim('message-2');
+      await storage.incomingMessages.markFailed('message-2');
+      await expect(
+        storage.incomingMessages.listUndeliveredContactIds(),
+      ).resolves.toEqual([]);
+    } finally {
+      storage.close();
+    }
+  });
+
+  it('rechaza poner en cuarentena un mensaje que no está en procesamiento', async () => {
+    const storage = openSqliteStorage(':memory:');
+    try {
+      await storage.incomingMessages.enqueue({
+        messageId: 'message-1',
+        businessId: 'business-1',
+        contactId: 'contact-1@lid',
+        body: 'hola',
+        receivedAt: new Date('2026-10-15T15:00:00.000Z'),
+      });
+
+      await expect(
+        storage.incomingMessages.markFailed('message-1'),
+      ).rejects.toThrow(/is not processing/);
+    } finally {
+      storage.close();
+    }
+  });
+
   it('restaura los mensajes en procesamiento después de un reinicio', async () => {
     const storage = openSqliteStorage(':memory:');
     try {

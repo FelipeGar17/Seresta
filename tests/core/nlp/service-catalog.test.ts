@@ -23,7 +23,7 @@ describe('toServiceCatalog', () => {
       aliases: ['corte', 'corte de pelo'],
     });
 
-    expect(toServiceCatalog([service])).toEqual([
+    expect(toServiceCatalog([service], { enrichAliasesFromPresets: false })).toEqual([
       {
         id: 'srv-corte',
         name: 'Corte de cabello',
@@ -41,7 +41,9 @@ describe('toServiceCatalog', () => {
       active: false,
     });
 
-    const result = buildServiceCatalog([active, inactive]);
+    const result = buildServiceCatalog([active, inactive], {
+      enrichAliasesFromPresets: false,
+    });
 
     expect(result.entries).toEqual([
       {
@@ -118,12 +120,40 @@ describe('contrato catálogo NLP ↔ servicio canónico', () => {
       if (match.status !== 'matched') throw new Error('Se esperaba matched');
 
       expect(match.service.id).toBe(service.id);
-      expect(catalog.find((entry) => entry.id === match.service.id)).toEqual({
-        id: service.id,
-        name: service.name,
-        aliases: service.aliases,
-      });
+      const entry = catalog.find((item) => item.id === match.service.id);
+      expect(entry?.id).toBe(service.id);
+      expect(entry?.name).toBe(service.name);
+      expect(entry?.aliases ?? []).toEqual(expect.arrayContaining(service.aliases ?? []));
     }
+  });
+
+  it('enriquece aliases con presets sin colisionar con otros servicios', () => {
+    const catalog = toServiceCatalog([
+      createService({ id: 'cut', name: 'Corte de cabello', aliases: [] }),
+      createService({ id: 'beard', name: 'Arreglo de barba', aliases: [] }),
+    ]);
+
+    expect(matchService('quiero un corte de pelo', catalog)).toMatchObject({
+      status: 'matched',
+      service: { id: 'cut' },
+    });
+    expect(matchService('quiero perfilado de barba', catalog)).toMatchObject({
+      status: 'matched',
+      service: { id: 'beard' },
+    });
+  });
+
+  it('reconoce "corte de pelo y barba" como servicio combinado configurado', () => {
+    const catalog = toServiceCatalog([
+      createService({ id: 'cut', name: 'Corte de cabello', aliases: ['corte'] }),
+      createService({ id: 'combo', name: 'Corte y barba', aliases: [] }),
+      createService({ id: 'beard', name: 'Arreglo de barba', aliases: ['barba'] }),
+    ]);
+
+    expect(matchService('quiero un corte de pelo y barba', catalog)).toMatchObject({
+      status: 'matched',
+      service: { id: 'combo' },
+    });
   });
 
   it('representa la ambigüedad de alias compartidos sin elegir un servicio', () => {

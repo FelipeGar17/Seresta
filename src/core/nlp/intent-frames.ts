@@ -66,12 +66,7 @@ const PRICES_LEAD = [
   'cual es el precio',
   'cual es la tarifa',
   'cual es el valor',
-  'precio de',
-  'precio del',
-  'tarifa de',
-  'tarifa del',
-  'valor de',
-  'valor del',
+  'precio de','precio del','tarifa de','tarifa del','valor de', 'valor del',
 ];
 
 const ARTICLES = 'un|una|el|la|los|las';

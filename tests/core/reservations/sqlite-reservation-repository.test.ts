@@ -125,6 +125,28 @@ describe('SqliteReservationRepository', () => {
     ).resolves.toBe(true);
   });
 
+  it('solo reutiliza una reserva provisional si el contenido no cambió', async () => {
+    const storage = openStorage(await createDatabasePath());
+    const pending = reservation({ status: 'pending' });
+
+    await expect(
+      storage.reservations.createPendingIfAvailable(pending),
+    ).resolves.toBe(true);
+    await expect(
+      storage.reservations.createPendingIfAvailable(pending),
+    ).resolves.toBe(true);
+
+    await expect(
+      storage.reservations.createPendingIfAvailable(
+        reservation({
+          status: 'pending',
+          startsAt: new Date('2026-10-16T21:00:00.000Z'),
+          endsAt: new Date('2026-10-16T21:30:00.000Z'),
+        }),
+      ),
+    ).resolves.toBe(false);
+  });
+
   it('permite solo una reserva entre dos solicitudes simultáneas', async () => {
     const storage = openStorage(await createDatabasePath());
     const contenders = ['one', 'two'].map((id) =>
@@ -138,6 +160,38 @@ describe('SqliteReservationRepository', () => {
     );
 
     expect(results.filter(Boolean)).toHaveLength(1);
+  });
+
+  it('elimina provisionales abandonadas sin tocar confirmadas', async () => {
+    const storage = openStorage(await createDatabasePath());
+    const old = new Date('2026-10-15T10:00:00.000Z');
+    const recent = new Date('2026-10-15T14:30:00.000Z');
+
+    await storage.reservations.create(
+      reservation({ id: 'old-pending', status: 'pending', createdAt: old }),
+    );
+    await storage.reservations.create(
+      reservation({ id: 'recent-pending', status: 'pending', createdAt: recent }),
+    );
+    await storage.reservations.create(
+      reservation({ id: 'old-confirmed', createdAt: old }),
+    );
+
+    await expect(
+      storage.reservations.deleteStalePendingBefore(
+        new Date('2026-10-15T14:00:00.000Z'),
+      ),
+    ).resolves.toBe(1);
+
+    await expect(
+      storage.reservations.getById('old-pending'),
+    ).resolves.toBeNull();
+    await expect(
+      storage.reservations.getById('recent-pending'),
+    ).resolves.not.toBeNull();
+    await expect(
+      storage.reservations.getById('old-confirmed'),
+    ).resolves.not.toBeNull();
   });
 
   it('conserva y depura cancelaciones según su cancelledAt', async () => {

@@ -25,8 +25,12 @@ próxima sesión; no es un diario de cambios.
   como tal y nunca desplazar la reserva a otra fecha. Build y pruebas pasan;
   falta comprobar ese caso manualmente con el runtime.
 - El usuario reportó una cita pedida para jueves que terminó en miércoles.
-  Sigue sin causa reproducida. La regresión automática confirma que “el jueves”
-  se resuelve en la zona horaria del negocio aunque UTC haya cruzado medianoche.
+  Causa reproducida el 02/11/2026: `requestedDate` es una fecha calendario
+  (medianoche UTC) y se formatea como instante con la zona del negocio, así que
+  en zonas UTC-5 se muestra el día anterior. Afecta solo el texto de
+  `availability-inquiry-flow.ts` (mensaje sin cupos) y `booking-replies.ts`
+  (`getUnrecognizedFieldReply`); el instante guardado usa `combineDateAndTime`.
+  Falta corregir y confirmar manualmente que la reserva almacenada no se desplazó.
 - Primera pasada de mensajes compactos: menú numerado, respuestas más
   escaneables y opciones `1`/`2`/`3` interpretadas solo si el menú de entrada
   fue el último mensaje del bot. Los números no seleccionan opciones durante
@@ -93,6 +97,57 @@ próxima sesión; no es un diario de cambios.
 5. Priorizar el piloto local; planear Electron y, en una etapa separada, la
    edición alojada de WhatsApp Business. El README conserva el estado de
    producto y sus límites.
+
+### Plan de correcciones acordado (02/11/2026)
+
+Implementar en este orden, con las pruebas del módulo y después la suite
+completa. No ejecutar WhatsApp ni Calendar reales durante la validación
+automática.
+
+1. **A1 · Mostrar la fecha correcta.** Formatear `requestedDate` como fecha
+   calendario (medianoche UTC), no como instante. Agregar un helper en
+   `src/core/time/business-time.ts` que formatee en UTC y usarlo en
+   `availability-inquiry-flow.ts` y `booking-replies.ts`. Regresión: pedir
+   «jueves» en `America/Bogota` y exigir «jueves» en el texto.
+2. **A2 · Cola que no se bloquea.** Añadir el estado terminal `failed` a
+   `IncomingMessageStatus`, límite de intentos (5) y cuarentena con
+   `markFailed`; excluir `failed` de `getNextUndelivered` y
+   `listUndeliveredContactIds`. Disparar `drainPending()` con un intervalo del
+   runtime (15-30 s), no con un timer dentro del procesador. El primer fallo
+   debe seguir dejando `pending` con `failedAttempts: 1`.
+3. **A3 · Recuperación tras reconexión.** Re-ejecutar `recover()` y
+   `deleteExpired()` en cada `ready` (son idempotentes), no solo en el primero.
+   En `disconnected` tras estar listo, intentar reconexión acotada con backoff o
+   fallar de forma explícita. Probar solo manualmente.
+4. **A4 · Pendientes fantasma.** Añadir `deleteStalePendingBefore(cutoff)` al
+   contrato y a SQLite/memoria; purgar solo `pending` con más de 60 minutos.
+   Nunca tocar `confirmed` ni `cancelled`. Ejecutar en el mantenimiento
+   periódico, después de `recover()`.
+5. **A5 · Idempotencia con contenido.** En `createPendingIfAvailable`, si el ID
+   ya existe, comparar `startsAt`, `endsAt`, `serviceId` y `status`: devolver
+   `true` solo si son equivalentes; si no, `false`. Mantener el test de
+   colisiones.
+6. **A7 · Listas numeradas (segunda pasada).** Numerar servicios y horarios y
+   parsear `1/2/3` dentro del flujo correspondiente, guardando las opciones
+   ofrecidas en la conversación. Es el cambio de mayor riesgo: hacerlo después
+   de A1-A5 y con pruebas dedicadas de menú de entrada y reserva activa.
+
+No modificar **A6**: «cancelar» durante un borrador reinicia el flujo a
+propósito; el usuario lo confirmó el 02/11/2026.
+
+Dejar para después el refactor de modularidad (extraer el lector de Calendar de
+`booking-flow.ts` y las reglas de enrutado del coordinador); no cambia
+comportamiento y no es prioritario.
+
+Invariantes que no se deben romper:
+
+- La conversación vence a los 10 minutos sin respuesta
+  (`CONVERSATION_TTL_MINUTES`); cada mensaje renueva el plazo.
+- Tras confirmar, una cita sigue siendo cancelable aunque la conversación haya
+  vencido: la cancelación busca en `listConfirmedByContact`, no en la
+  conversación. No purgar `confirmed`.
+- `createPendingIfAvailable` sigue rechazando solapamientos (mismo hueco →
+  `false`).
 
 ### Prioridades de trabajo
 

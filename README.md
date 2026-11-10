@@ -1,177 +1,216 @@
-# Sistema de gestión de citas por WhatsApp
+# Seresta — asistente de citas por WhatsApp
 
-Aplicación local TypeScript para gestionar reservas por WhatsApp Web y
-sincronizarlas con Google Calendar.
+Seresta es una aplicación TypeScript que gestiona conversaciones de citas,
+consulta disponibilidad y sincroniza reservas con Google Calendar.
 
-## Conectores y persistencia
+## Productos y estado
 
-- `src/connectors/whatsapp/` implementa `whatsapp-web.js` con `LocalAuth`.
-- `src/connectors/google-calendar/` implementa OAuth local, consulta de agenda,
-  creación idempotente y cancelación de eventos.
-- `src/core/messaging/` guarda mensajes entrantes en una bandeja SQLite,
-  conserva el orden FIFO por contacto y deduplica por ID de mensaje.
-- `src/core/reservations/` mantiene las reservas locales y evita colisiones
-  entre solicitudes concurrentes.
+- **Seresta Local (implementado):** runtime en el computador del negocio,
+  WhatsApp Web mediante `whatsapp-web.js` y `LocalAuth`, configuración local y
+  persistencia SQLite. Debe conservar su comportamiento.
+- **Seresta Intermediario (en planificación):** un número central de WhatsApp Business para atender clientes de distintos locales, con resolución de negocio y calendarios por trabajador. El plan de fases y decisiones está en
+  [PLAN_TRABAJO_SERESTA_INTERMEDIARIO.md](./PLAN_TRABAJO_SERESTA_INTERMEDIARIO.md).
+  Meta proporcionó recursos de prueba; el adaptador de Business API/webhook y
+  el portal alojado aún no están implementados en este repositorio.
+- **Seresta con el número de cada negocio:** posibilidad futura, fuera del
+  alcance actual.
 
-El runtime usa `src/index.ts`. La consola del coordinador conserva adaptadores
-en memoria para pruebas locales; no representa una consulta real a Google
-Calendar.
+No usar `package.json`, una variable global ni el `businessId` para escoger
+silenciosamente entre productos. Local e Intermediario necesitan composiciones
+separadas; no deben compartir por accidente credenciales, sesiones, datos o
+configuración de negocio.
 
-## Configuración manual del prototipo
+## Mapa del proyecto
 
-1. Instala las dependencias con `npm install`.
-2. Para esta configuración manual, crea un cliente OAuth de escritorio para
-   Google Calendar y guarda el JSON como `.google_auth/client_secret.json`.
-3. Configura el `calendarId` en `negocio.json`.
-4. Autoriza la cuenta que tiene acceso a ese calendario y arranca:
+### Punto de entrada y conectores
 
-```powershell
-npm run calendar:auth
-npm start
-```
+- [`src/index.ts`](./src/index.ts): composición del runtime Local; carga
+  configuración, inicia Google Calendar/SQLite/WhatsApp Web, recupera mensajes pendientes y hace mantenimiento.
+- [`src/config/`](./src/config/): carga y valida la configuración local del
+  negocio.
+- [`src/connectors/whatsapp/whatsapp-connector.ts`](./src/connectors/whatsapp/whatsapp-connector.ts):
+  contrato neutral del conector de mensajería.
+- [`src/connectors/whatsapp/whatsapp-web-connector.ts`](./src/connectors/whatsapp/whatsapp-web-connector.ts):
+  adaptador Local de `whatsapp-web.js`, `LocalAuth`, QR y ciclo de vida.
+- [`src/connectors/google-calendar/`](./src/connectors/google-calendar/):
+  OAuth local y adaptador de Google Calendar.
 
-`npm start` compila y ejecuta el runtime. Valida `negocio.json` (o la ruta de
-`BUSINESS_CONFIG_PATH`), verifica acceso real al calendario configurado y espera
-a que WhatsApp esté listo y recupere la bandeja antes de anunciar que el sistema
-inició. Si falta alguna configuración o conexión, el proceso termina con error.
-En la primera conexión de WhatsApp muestra un QR; escanéalo y espera el mensaje
-de sistema iniciado. `LocalAuth` conserva la sesión en `.wwebjs_auth/`. Las
-credenciales OAuth se conservan en `.google_auth/tokens.json`.
+### Núcleo conversacional y reservas
 
-Para aislar solo la base de datos local durante una prueba, configura
-`SQLITE_DATABASE_PATH` antes de `npm start`. Esto **no** crea un WhatsApp ni un
-Google Calendar de prueba: los conectores siguen usando las cuentas reales
-configuradas.
+- [`src/core/conversation/coordinator.ts`](./src/core/conversation/coordinator.ts):
+  carga la conversación, analiza el mensaje, decide qué flujo atender y
+  persiste el turno.
+- [`src/core/conversation/booking-flow.ts`](./src/core/conversation/booking-flow.ts):
+  borrador, captura de datos y confirmación de reserva.
+- [`src/core/conversation/availability-inquiry-flow.ts`](./src/core/conversation/availability-inquiry-flow.ts):
+  consulta de disponibilidad independiente, sin crear una reserva.
+- [`src/core/conversation/cancellation-flow.ts`](./src/core/conversation/cancellation-flow.ts):
+  selección y cancelación de citas confirmadas.
+- [`src/core/conversation/catalog-reply.ts`](./src/core/conversation/catalog-reply.ts),
+  [`entry-replies.ts`](./src/core/conversation/entry-replies.ts),
+  [`courtesy-flow.ts`](./src/core/conversation/courtesy-flow.ts) y
+  [`post-confirmation-flow.ts`](./src/core/conversation/post-confirmation-flow.ts):
+  catálogo, bienvenida/entrada, cortesía y respuesta posterior a confirmar.
+- [`src/core/conversation/turn-utils.ts`](./src/core/conversation/turn-utils.ts):
+  contexto conversacional y respuestas cortas.
+- [`src/core/booking/`](./src/core/booking/): ingreso de la solicitud,
+  resolución de servicio, validación de horarios, reglas de disponibilidad y
+  agenda.
+- [`src/core/reservations/`](./src/core/reservations/): contratos y
+  repositorios de reservas; [`src/core/storage/`](./src/core/storage/):
+  persistencia SQLite local.
+- [`src/core/time/business-time.ts`](./src/core/time/business-time.ts): fuente
+  de verdad para fecha calendario, hora, zona horaria y combinación de fecha
+  con hora.
 
-`npm run dev` queda disponible para desarrollo con reinicio automático al
-modificar archivos.
+### Ruta rápida para tareas de NLP/conversación
 
-`npm start` compila en cada arranque, por lo que este flujo de instalación
-manual requiere las dependencias de desarrollo instaladas. Para un instalador
-de clientes se empaquetará el runtime y sus dependencias; no se pedirá al
-cliente instalar Node/npm ni ejecutar `npm install`.
+Para ampliar vocabulario o corregir una interpretación, seguir el flujo en
+este orden en vez de leer todo el proyecto:
 
-No subas `.google_auth/`, `.wwebjs_auth/`, `.wwebjs_cache/`, `.env`, `data/` ni
-credenciales al repositorio; estas rutas están excluidas por `.gitignore`.
+1. **Pipeline único:** [`src/core/nlp/message-analysis.ts`](./src/core/nlp/message-analysis.ts)
+   corrige la escritura una vez y comparte el resultado entre detección de
+   intención y extracción de entidades.
+2. **Intenciones y vocabulario:** [`synonyms.ts`](./src/core/nlp/synonyms.ts)
+   contiene expresiones generales por intención;
+   [`intent-detector.ts`](./src/core/nlp/intent-detector.ts) las combina con
+   marcos lingüísticos, contexto de respuesta corta y evidencia de detección;
+   [`intent-frames.ts`](./src/core/nlp/intent-frames.ts) reconoce estructuras
+   genéricas/catalogadas; [`intent-policy.ts`](./src/core/nlp/intent-policy.ts)
+   decide si aceptar, aclarar u ofrecer opciones.
+3. **Normalización y errores de escritura:**
+   [`normalize.ts`](./src/core/nlp/normalize.ts) distingue normalización de
+   intención y de extracción;
+   [`spelling-corrector.ts`](./src/core/nlp/spelling-corrector.ts) contiene
+   correcciones seguras antes del análisis.
+4. **Datos reconocidos:** [`entity-extractor.ts`](./src/core/nlp/entity-extractor.ts)
+   extrae nombre, fecha, hora y servicio mencionado;
+   [`date-parser.ts`](./src/core/nlp/date-parser.ts) interpreta fechas en
+   español y usa la zona horaria indicada;
+   [`service-matcher.ts`](./src/core/nlp/service-matcher.ts) compara nombres y
+   alias sin elegir arbitrariamente en ambigüedades.
+5. **Catálogo y reserva:** [`service-catalog.ts`](./src/core/nlp/service-catalog.ts)
+   obtiene el catálogo operativo de los servicios activos configurados;
+   [`src/core/booking/reservation-intake.ts`](./src/core/booking/reservation-intake.ts)
+   conecta el análisis con los datos de reserva, y
+   [`src/core/booking/service-resolution.ts`](./src/core/booking/service-resolution.ts)
+   resuelve coincidencias contra el negocio canónico.
+6. **Enrutamiento y diálogo:** verificar
+   [`src/core/conversation/coordinator.ts`](./src/core/conversation/coordinator.ts)
+   y solo el flujo afectado (`booking-flow`, `availability-inquiry-flow`,
+   `cancellation-flow`, `catalog-reply`, etc.). Las pruebas del coordinador
+   comprueban interacciones entre intenciones y estado.
 
-La bandeja SQLite conserva el ID y el estado de cada mensaje para deduplicar y
-recuperar trabajo interrumpido. Al marcar una respuesta como enviada, elimina
-el texto y los datos de contacto de esa fila. Si el proceso cae después de que
-WhatsApp acepta una respuesta pero antes de guardar el acuse local, el reintento
-puede entregar esa respuesta nuevamente (entrega al menos una vez).
+Pruebas NLP en [`tests/core/nlp/`](./tests/core/nlp/), incluyendo
+`intent-detector.test.ts`, `entity-extractor.test.ts`,
+`date-parser.test.ts`, `service-matcher.test.ts`,
+`spelling-corrector.test.ts` y `audit-regressions.test.ts`. Pruebas del diálogo
+en [`tests/core/conversation/`](./tests/core/conversation/).
 
-## Modalidades del servicio y estado del producto
+## Restricciones para cambios
 
-### Servicio local
+- **Proteger Seresta Local:** no reemplazar su composición, `whatsapp-web.js`,
+  `LocalAuth`, QR, `negocio.json`, persistencia SQLite ni conexión local de
+  Calendar para implementar Intermediario. Todo cambio a lógica compartida
+  debe conservar el comportamiento Local y agregar regresiones.
+- Mantener reglas de negocio y contratos en `src/core/`. No importar allí
+  `whatsapp-web.js`, SDK de Meta, `googleapis`, `better-sqlite3`, Cloudflare,
+  D1 ni detalles de infraestructura. Adaptadores y composición traducen los
+  sistemas externos.
+- Reutilizar reglas cuando sean realmente comunes. Mantener el alta del local,
+  OAuth web por negocio, resolución de tenant y políticas del número central
+  fuera de los flujos Local. Evitar ramas dispersas del tipo “si es producto
+  X” dentro del núcleo.
+- No renombrar todos los flujos con `Wppweb` ni marcar límites solo con
+  comentarios: usar contratos, carpetas, composiciones y dependencias claras.
+  Nombrar por proveedor solo módulos que dependan de ese proveedor.
+- El catálogo de negocio es la fuente de verdad para los servicios. No
+  hardcodear barberías, peluquerías o servicios en sinónimos genéricos ni
+  seleccionar un servicio ambiguo por suposición.
+- Al cambiar NLP, cubrir interpretaciones **positivas, negativas, ambiguas,
+  errores de escritura y mensajes con varias intenciones**. Las negaciones
+  explícitas deben impedir que se active la regla positiva correspondiente.
+- Las respuestas “sí/no” aisladas dependen del estado y la pregunta esperada;
+  no inferir confirmación solo por palabras del historial. Preservar el paso
+  doble de confirmación de una reserva.
+- `detection.score` cuenta evidencia de reglas; **no es una probabilidad**.
+  No presentar porcentajes de confianza sin calibración con ejemplos medidos.
+- No completar datos que no se reconocieron ni redondear horarios
+  silenciosamente. Tratar fecha calendario y fecha/hora como conceptos
+  distintos: usar `business-time.ts` y `combineDateAndTime` para formar un
+  instante; no cambiar de zona horaria manualmente.
+- Mantener TypeScript estricto, ESM e imports locales con extensión `.js`.
+  Evitar `any`, capturas amplias y fallos silenciosos; los errores relevantes
+  deben quedar claros.
+- No agregar IA generativa ni enviar conversaciones/datos de clientes a
+  servicios externos. La tercera modalidad (números de negocio propios) no
+  forma parte del trabajo aprobado actualmente.
 
-- El runtime actual usa WhatsApp Web en un computador del negocio. Ese equipo
-  debe permanecer encendido y el runtime iniciado para responder mensajes.
-- Las citas confirmadas se guardan en la base SQLite local y en el calendario
-  de Google elegido por ese negocio. El cliente autoriza su propia cuenta de
-  Google y configura su `calendarId`; los negocios no comparten calendario.
-- Cuando ya conoce el servicio y la fecha, el bot consulta Calendar y las
-  reservas locales para indicar si hay horarios por la mañana, la tarde o la
-  noche. Si la hora elegida está ocupada, propone hasta tres opciones cercanas
-  y vuelve a comprobar la disponibilidad cuando el cliente elige una.
-- También se puede consultar disponibilidad sin iniciar una reserva. Si falta
-  el servicio o la fecha, el bot los solicita y conserva los datos al probar
-  otro día. La consulta no crea una cita; para reservar, el cliente debe
-  pedirlo explícitamente.
-- Al consultar disponibilidad durante una reserva, el bot conserva el borrador
-  y explica que necesita el servicio para calcular los horarios. «Salir» cancela
-  el borrador sin crear una cita. Los horarios disponibles se presentan en
-  líneas separadas por franja.
-- Las respuestas se presentan en una sola burbuja por turno, con texto breve,
-  emojis moderados y opciones numeradas. `1`, `2` y `3` solo se interpretan
-  cuando el último mensaje mostró el menú de entrada; durante una reserva no
-  sustituyen el dato que el bot está solicitando.
-- En el primer turno, un saludo o un mensaje que no se entiende recibe una
-  bienvenida. Si el primer mensaje ya contiene una solicitud reconocible, el
-  bot la atiende directamente y conserva todos los datos que haya entendido.
-- El usuario probó manualmente el flujo integrado: respuestas, creación y
-  cancelación de citas, y rechazo de un bloque ocupado.
-- `npm start` verifica el archivo de negocio, consulta Calendar y espera a que
-  WhatsApp esté listo antes de anunciar el inicio. Esta es una forma de arranque
-  para un equipo ya configurado, no un instalador de clientes.
-- Pendiente: crear una aplicación Electron con asistente de configuración,
-  autorización de Google, vinculación por QR, estado del runtime y un botón de
-  inicio. El instalador deberá mantener base de datos, tokens y sesión de
-  WhatsApp fuera de la carpeta de la aplicación, con copias de seguridad y
-  migraciones seguras para que las actualizaciones no borren los datos.
+## Desarrollo y validación
 
-### Google Calendar para clientes
-
-- El proyecto OAuth de producción será administrado por el producto; cada
-  negocio solo autorizará su cuenta y seleccionará su propio calendario. No se
-  recomienda pedir a cada cliente que cree un proyecto en Google Cloud.
-- Antes de ofrecerlo públicamente, revisar el estado de publicación OAuth y
-  completar la verificación que Google requiera para el alcance de eventos de
-  Calendar. En modo `Testing`, los usuarios deben estar autorizados como
-  testers y los permisos offline para alcances distintos de perfil básico
-  caducan a los siete días.
-- Una reserva que primero consulta disponibilidad por franja requiere
-  aproximadamente seis solicitudes a Calendar (cuatro consultas de
-  disponibilidad, una comprobación idempotente y una creación), suponiendo una
-  sola página de resultados y ningún reintento. Si el cliente proporciona la
-  hora exacta desde el inicio, normalmente son cinco. El arranque añade una
-  consulta de comprobación. Una consulta independiente de disponibilidad
-  requiere normalmente una lectura por cada fecha revisada; al reservar
-  después, la hora elegida se vuelve a consultar. Revisar las cuotas y
-  condiciones de facturación vigentes antes de crecer:
-  [cuotas de Google Calendar API](https://developers.google.com/workspace/calendar/api/guides/quota).
-
-### WhatsApp Business alojado
-
-- La integración oficial de WhatsApp Business Platform todavía no está
-  implementada. La opción futura es alojar el motor en un servidor, recibir
-  mensajes mediante webhooks y responder con Cloud API; el cliente no tendría
-  que mantener un computador local encendido.
-- Reutilizar el motor conversacional y añadir otro adaptador de mensajería. El
-  servicio requerirá incorporar el número/cuenta de cada negocio, configurar
-  webhooks y gestionar sus permisos y costos en Meta.
-- Fuera de la ventana de atención de WhatsApp Business se requieren plantillas
-  aprobadas; además, se deben respetar las reglas de consentimiento y mensajería
-  de Meta. Consultar la
-  [documentación oficial de Cloud API](https://developers.facebook.com/documentation/business-messaging/whatsapp/about-the-platform).
-
-## Pendientes antes de ofrecer el producto
-
-1. Reproducir el caso reportado en que una cita solicitada para un jueves quedó
-   en el miércoles anterior. El parser ahora tiene una regresión para confirmar
-   que “el jueves” sigue significando jueves aunque UTC ya haya cruzado
-   medianoche; el desplazamiento observado todavía no está explicado.
-2. Probar manualmente que una hora del mismo día que ya pasó se rechaza con una
-   explicación clara y nunca se cambia automáticamente a otra fecha. La
-   validación y el mensaje explícito ya están cubiertos por pruebas unitarias.
-3. Preparar y verificar el consentimiento OAuth para usuarios externos antes
-   de distribuir el runtime a varios negocios.
-4. Diseñar el instalador local de Electron, incluyendo persistencia y
-   actualización segura.
-5. Diseñar la edición alojada con WhatsApp Business Platform, webhooks y
-   aislamiento de datos por negocio.
-
-## Validación
+Requiere Node.js/npm compatibles con las dependencias del proyecto:
 
 ```powershell
+npm install
 npm run build
 npm test
-npm run test:gcal
 ```
 
-`npm run test:gcal` ejecuta pruebas aisladas con un API simulado; no requiere
-credenciales ni modifica un calendario real. La autorización OAuth requiere
-Google Cloud y permisos locales. Las pruebas autenticadas de WhatsApp y
-Calendar deben ejecutarse de forma manual y aislada.
-
-Las pruebas manuales de WhatsApp Web existentes están en
-[`tests/whatsapp-web/`](./tests/whatsapp-web/):
+Para NLP o conversación, ejecutar primero el subconjunto afectado y luego la
+suite completa:
 
 ```powershell
-npm run whatsapp:test
-npm run whatsapp:message-test
+npx vitest run tests/core/nlp
+npx vitest run tests/core/conversation
+npm test
+npm run build
+git diff --check
 ```
 
-La integración oficial de WhatsApp Business no está implementada; puede
-añadirse como otro adaptador sin cambiar el coordinador ni la bandeja de
-mensajes. Consulta el diseño en [`DocumentoInicial.md`](./DocumentoInicial.md)
-y los requisitos en [`docs/product-spec.md`](./docs/product-spec.md).
+No afirmar que pruebas, compilación o integraciones pasaron si no se ejecutaron.
+Los cambios solo documentales no requieren build ni suite completa; comprobar
+el formato del diff.
+
+### Consolas de desarrollo
+
+```powershell
+$env:BUSINESS_CONFIG_PATH = ".\negocio.json"; npm run intent:console
+$env:BUSINESS_CONFIG_PATH = ".\negocio.json"; npm run coordinator:console
+```
+
+La consola del coordinador usa adaptadores en memoria: **no** consulta el
+Google Calendar real y no representa una verificación de disponibilidad de
+producción.
+
+## Runtime local y operaciones reales
+
+1. Configura el negocio en `negocio.json` (o indica otro archivo mediante
+   `BUSINESS_CONFIG_PATH`).
+2. Guarda el cliente OAuth de Google en `.google_auth/client_secret.json` y
+   ejecuta `npm run calendar:auth`.
+3. Inicia el runtime con `npm start`; en la primera vinculación escanea el QR
+   de WhatsApp. El runtime valida la configuración, comprueba Calendar y
+   recupera la bandeja antes de anunciar que está listo.
+
+`npm start` y los comandos `npm run whatsapp:*` usan servicios/cuentas reales.
+No ejecutarlos como parte de una validación automática ni en paralelo con
+`tests/whatsapp-web/message-test.ts`: pueden procesar mensajes, crear o
+cancelar citas. No se debe asumir que `SQLITE_DATABASE_PATH` aísla WhatsApp ni
+Google Calendar.
+
+No subir `.env`, `negocio.json` local, `.google_auth/`, `.wwebjs_auth/`,
+`.wwebjs_cache/`, bases de datos, tokens, credenciales, IDs/tokens privados de
+Meta ni datos de clientes. Los recursos de prueba de Meta, si se usan, deben
+inyectarse como configuración local/secreto de entorno y nunca imprimirse.
+Automatizar esas pruebas con mocks/fixtures; cualquier prueba autenticada debe
+ser manual, autorizada y aislada.
+
+## Documentación de producto
+
+El alcance, casos de uso, decisiones pendientes y fases entregables de Seresta
+Intermediario están en
+[PLAN_TRABAJO_SERESTA_INTERMEDIARIO.md](./PLAN_TRABAJO_SERESTA_INTERMEDIARIO.md).
+La prueba técnica aislada de Cloudflare de la Fase 1 está documentada en
+[spikes/cloudflare-viability/README.md](./spikes/cloudflare-viability/README.md).
+Este README describe cómo orientarse en el código existente; el plan describe
+el producto alojado que todavía se debe construir.

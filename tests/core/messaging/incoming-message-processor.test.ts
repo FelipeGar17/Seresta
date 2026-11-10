@@ -6,7 +6,10 @@ import type {
 import { parseBusinessConfig } from '../../../src/config/load-config.js';
 import { IncomingMessageProcessor } from '../../../src/core/messaging/incoming-message-processor.js';
 import { openSqliteStorage, type SqliteStorage } from '../../../src/core/storage/sqlite-storage.js';
-import type { IncomingConversationHandler } from '../../../src/core/messaging/incoming-message-processor.js';
+import type {
+  IncomingConversationHandler,
+  IncomingMessageProcessorOptions,
+} from '../../../src/core/messaging/incoming-message-processor.js';
 
 const business: ConfiguracionNegocio = parseBusinessConfig({
   businessId: 'business-1',
@@ -37,6 +40,7 @@ afterEach(() => {
 const createProcessor = (
   handler: IncomingConversationHandler,
   sent: string[],
+  options?: IncomingMessageProcessorOptions,
 ): { processor: IncomingMessageProcessor; storage: SqliteStorage } => {
   const storage = openSqliteStorage(':memory:');
   storages.push(storage);
@@ -51,6 +55,7 @@ const createProcessor = (
         },
       },
       business,
+      options,
     ),
   };
 };
@@ -173,6 +178,38 @@ describe('IncomingMessageProcessor', () => {
     expect(sent).toEqual([
       'contact-1@lid:respuesta recuperada',
     ]);
+  });
+
+  it('pone en cuarentena un mensaje que falla siempre y sigue con el siguiente', async () => {
+    const processed: string[] = [];
+    const sent: string[] = [];
+    const handler: IncomingConversationHandler = {
+      async handleMessage(input) {
+        processed.push(input.message);
+        if (input.message === 'veneno') {
+          throw new Error('fallo determinístico');
+        }
+        return {
+          conversation: conversation(input),
+          reply: `respuesta:${input.message}`,
+          nextField: null,
+        };
+      },
+    };
+    const { processor, storage } = createProcessor(handler, sent, {
+      maxFailedAttempts: 2,
+    });
+
+    await processor.accept(received('message-1', 'veneno'));
+    await processor.accept(received('message-2', 'siguiente'));
+    await processor.drainPending();
+    await processor.drainPending();
+
+    expect(processed).toEqual(['veneno', 'veneno', 'siguiente']);
+    await expect(
+      storage.incomingMessages.getNextUndelivered('contact-1@lid'),
+    ).resolves.toBeNull();
+    expect(sent).toEqual(['contact-1@lid:respuesta:siguiente']);
   });
 
   it('reenvía una respuesta pendiente sin volver a ejecutar el coordinador', async () => {

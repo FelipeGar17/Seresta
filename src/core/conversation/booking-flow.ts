@@ -14,6 +14,7 @@ import { validateService } from '../booking/service-validator.js';
 import {
   addDays,
   combineDateAndTime,
+  formatBusinessTime24,
   getBusinessDateOnly,
   getDateOnly,
   getLocalTimeMinutes,
@@ -38,10 +39,11 @@ import {
   CONFIRMATION_OPTIONS,
   formatFinalConfirmationPrompt,
   formatConfirmedReservationReply,
-  getAvailabilityPeriodReply,
+  getAvailabilityReply,
   getFieldPrompt,
   getPromptForData,
   getScheduleRejectionReply,
+  getSelectableServices,
   getUnrecognizedFieldReply,
   getUnexpectedConfirmationReply,
 } from './booking-replies.js';
@@ -60,6 +62,11 @@ import {
   getLastBotQuestion,
   type FlowReply,
 } from './turn-utils.js';
+import {
+  clearOfferedOptions,
+  resolveOfferedOption,
+  setOfferedOptions,
+} from './offered-options.js';
 
 // Flujo de reserva: recopila y valida datos, gestiona las dos confirmaciones,
 // los cambios y la cancelación del borrador. El coordinador persiste la
@@ -193,6 +200,47 @@ export async function handleBookingFlow(
       /^(salir|quiero salir|salir de la reserva)$/u.test(detection.normalized))
   ) {
     return cancelBooking(conversation, message, now);
+  }
+
+  // Una lista numerada recién ofrecida se resuelve por posición. Solo aplica
+  // en el paso que la mostró y cuando el último mensaje del bot la contiene.
+  const selectedService =
+    conversation.state === 'collecting-service'
+      ? resolveOfferedOption(conversation, detection.normalized, 'service')
+      : undefined;
+  if (selectedService) {
+    clearOfferedOptions(conversation);
+    return finishBookingTurn(
+      conversation,
+      mergeReservationData(conversation.data, { serviceId: selectedService }),
+      business,
+      message,
+      now,
+      reservations,
+      calendar,
+    );
+  }
+
+  const selectedTime =
+    conversation.state === 'collecting-time'
+      ? resolveOfferedOption(conversation, detection.normalized, 'time')
+      : undefined;
+  if (selectedTime) {
+    clearOfferedOptions(conversation);
+    return finishBookingTurn(
+      conversation,
+      mergeReservationData(conversation.data, {
+        requestedTime: formatBusinessTime24(
+          new Date(selectedTime),
+          business.timezone,
+        ),
+      }),
+      business,
+      message,
+      now,
+      reservations,
+      calendar,
+    );
   }
 
   if (
@@ -590,6 +638,7 @@ async function finishBookingTurnWithSchedule(
       ? schedule.field
       : getValidNextReservationField(data, business);
   let reply: string;
+  let offeredTimeStarts: Date[] | undefined;
 
   if (schedule.status === 'invalid') {
     reply =
@@ -622,11 +671,13 @@ async function finishBookingTurnWithSchedule(
     ) {
       delete data.requestedTimeOfDay;
     }
-    reply = getAvailabilityPeriodReply(
+    const availability = getAvailabilityReply(
       schedule.availableStarts,
       business,
       requestedPeriod,
     );
+    reply = availability.reply;
+    offeredTimeStarts = availability.options;
   } else if (nextField) {
     reply =
       unrecognizedField === nextField
@@ -647,6 +698,23 @@ async function finishBookingTurnWithSchedule(
   conversation.state = getStateForField(nextField);
   conversation.intent = 'book-appointment';
   conversation.updatedAt = now;
+
+  if (nextField === 'serviceId') {
+    setOfferedOptions(
+      conversation,
+      'service',
+      getSelectableServices(business).map((service) => service.id),
+    );
+  } else if (offeredTimeStarts) {
+    setOfferedOptions(
+      conversation,
+      'time',
+      offeredTimeStarts.map((start) => start.toISOString()),
+    );
+  } else {
+    clearOfferedOptions(conversation);
+  }
+
   appendTurnMessages(conversation, message, reply, now);
 
   return { reply, nextField };
@@ -664,6 +732,7 @@ function cancelBooking(
   conversation.state = 'cancelled';
   conversation.intent = 'cancel-appointment';
   conversation.updatedAt = now;
+  clearOfferedOptions(conversation);
   appendTurnMessages(conversation, message, reply, now);
 
   return { reply, nextField: null };
@@ -794,6 +863,7 @@ async function confirmBooking(
   conversation.expiresAt = new Date(
     now.getTime() + POST_CONFIRMATION_ACK_TIMEOUT_MS,
   );
+  clearOfferedOptions(conversation);
   appendTurnMessages(conversation, message, reply, now);
 
   return { reply, nextField: null };

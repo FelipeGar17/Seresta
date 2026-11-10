@@ -1,5 +1,23 @@
 import type { Identifier, Reservation } from '../types.js';
 
+/**
+ * Equivalencia de una reserva provisional para la idempotencia de
+ * `createPendingIfAvailable`: solo un reintento con el mismo servicio e
+ * intervalo puede reutilizar la reserva ya reclamada. Si el borrador cambió,
+ * el adaptador debe volver a comprobar la disponibilidad.
+ */
+export function isSamePendingReservation(
+  existing: Reservation,
+  candidate: Reservation,
+): boolean {
+  return (
+    existing.status === candidate.status &&
+    existing.serviceId === candidate.serviceId &&
+    existing.startsAt.getTime() === candidate.startsAt.getTime() &&
+    existing.endsAt.getTime() === candidate.endsAt.getTime()
+  );
+}
+
 // Contrato de almacenamiento de reservas definitivas. No conoce WhatsApp ni
 // Google Calendar; el almacenamiento en memoria es reemplazable por SQLite.
 export interface ReservationRepository {
@@ -25,4 +43,7 @@ export interface ReservationRepository {
   update(reservation: Reservation): Promise<void>;
   // Elimina las reservas canceladas antes de `cutoff` y devuelve cuántas.
   deleteCancelledBefore(cutoff: Date): Promise<number>;
+  // Elimina las reservas provisionales creadas antes de `cutoff` y devuelve
+  // cuántas. Nunca toca reservas confirmadas o canceladas.
+  deleteStalePendingBefore(cutoff: Date): Promise<number>;
 }

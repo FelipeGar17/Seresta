@@ -1,0 +1,17 @@
+{
+  "name": "seresta-cloudflare-viability",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --local",
+    "deploy:dry-run": "wrangler deploy --dry-run",
+    "db:migrations:local": "wrangler d1 migrations apply seresta-viability --local",
+    "probe:googleapis": "wrangler deploy --config wrangler.googleapis-probe.jsonc --dry-run"
+  },
+  "dependencies": {
+    "googleapis": "^185.0.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
